@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Strategic Tree</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+</head>
+<body>
+    <div id="app">
+        <header>
+            <div class="logo">Strategic <em>Tree</em></div>
+            <div class="header-sep"></div>
+            <div class="hdr-btn-group">
+                <button class="btn btn-ghost btn-sm" id="btn-toggle-outline">☰ Outline</button>
+                <button class="btn btn-ghost btn-sm" id="btn-new">＋ New</button>
+                <button class="btn btn-ghost btn-sm" id="btn-import">⬆ Import</button>
+                <button class="btn btn-ghost btn-sm" id="btn-export-json">⬇ JSON</button>
+                <button class="btn btn-ghost btn-sm" id="btn-export-text">📄 Text</button>
+                <button class="btn btn-ghost btn-sm" id="btn-help">?</button>
+            </div>
+        </header>
+
+        <div id="body-row">
+            <div id="outline-panel">
+                <div class="panel-header">
+                    <span class="panel-title">Outline</span>
+                    <button class="btn btn-ghost btn-icon btn-sm" id="btn-close-outline">✕</button>
+                </div>
+                <div id="outline-scroll"></div>
+            </div>
+
+            <div id="canvas-wrap">
+                <svg id="graph"></svg>
+                <div id="legend">
+                    <div class="leg"><div class="leg-dot" style="border-color:var(--root-color)"></div>Root</div>
+                    <div class="leg"><div class="leg-dot" style="border-color:var(--q-color)"></div>Question</div>
+                    <div class="leg"><div class="leg-dot" style="border-color:var(--a-color)"></div>Answer</div>
+                </div>
+                <div id="zoom-bar">
+                    <div class="mini-btn" id="zoom-in">＋</div>
+                    <div class="mini-btn" id="zoom-out">－</div>
+                    <div class="mini-btn" id="zoom-fit">⊡</div>
+                </div>
+                <div id="view-bar">
+                    <div class="mini-btn" id="btn-collapse-all" title="Collapse All">⊟</div>
+                    <div class="mini-btn" id="btn-expand-all" title="Expand All">⊞</div>
+                </div>
+            </div>
+
+            <div id="edit-panel" class="collapsed">
+                <div class="panel-header">
+                    <span class="panel-title">Edit Node</span>
+                    <button class="btn btn-ghost btn-icon btn-sm" id="btn-close-edit">✕</button>
+                </div>
+                <div id="edit-scroll">
+                    <div class="empty-edit" id="edit-empty">Click any node<br>to edit it here</div>
+                    <div id="node-form" style="display:none">
+                        <div>
+                            <label class="form-label">Label</label>
+                            <input type="text" id="field-label" placeholder="Node label…">
+                        </div>
+                        <div>
+                            <label class="form-label">Notes</label>
+                            <textarea id="field-notes" placeholder="Optional detail…"></textarea>
+                        </div>
+                        <div>
+                            <label class="form-label">Type</label>
+                            <select id="field-type">
+                                <option value="root">Root Topic</option>
+                                <option value="question">Question</option>
+                                <option value="answer">Answer</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label">Priority</label>
+                            <input type="number" id="field-priority" min="0" step="1" placeholder="0">
+                        </div>
+                        <button class="btn btn-accent btn-full" id="btn-save-node">Save Changes</button>
+                        <button class="btn btn-ghost btn-full" id="btn-add-child">＋ Add Child Node</button>
+                        <button class="btn btn-danger btn-full" id="btn-delete-node">Delete Node</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="modal-overlay">
+        <div class="modal">
+            <div class="modal-title" id="modal-title"></div>
+            <div class="modal-body" id="modal-body"></div>
+            <div class="modal-footer" id="modal-footer"></div>
+        </div>
+    </div>
+    <div id="toast"></div>
+    <input type="file" id="file-input" accept=".json" style="display:none">
+
+    <script src="script.js"></script>
+</body>
+</html>
