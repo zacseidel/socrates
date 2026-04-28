@@ -705,6 +705,19 @@
       }
       const bulletEl = nodeEl.querySelector(`.answer-bullet[data-answer-id="${answerId}"]`);
       if (bulletEl) {
+        if (textEl) {
+          textEl.addEventListener('focus', () => {
+            nodeEl.querySelectorAll('.answer-bullet').forEach(b => b.classList.remove('answer-active'));
+            bulletEl.classList.add('answer-active');
+          });
+          textEl.addEventListener('blur', () => {
+            setTimeout(() => {
+              if (!bulletEl.contains(document.activeElement)) {
+                bulletEl.classList.remove('answer-active');
+              }
+            }, 0);
+          });
+        }
         const dragType = 'a-' + question.id;
         bulletEl.dataset.dragType = dragType;
         bulletEl.draggable = true;
