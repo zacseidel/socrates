@@ -3,8 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Socrates App</title>
-  <link rel="icon" type="image/png" href="icon2.png" />
+  <title>StrategyFractal</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body class="theme-modern">
@@ -12,15 +11,17 @@
 
   <header class="topbar" role="banner">
     <div class="brand">
-      <img src="icon2.png" class="brand-mark" aria-hidden="true" alt="" />
+      <div class="brand-mark" aria-hidden="true">SF</div>
       <div>
-        <h1>Socrates App</h1>
-        <p>A depth-first tree of questions and answers for strategic thinking.</p>
+        <h1>StrategyFractal</h1>
+        <p>Nested strategy questions, answers, sources, and reorderable branches.</p>
       </div>
     </div>
 
     <div class="toolbar-group" role="toolbar" aria-label="Primary actions">
       <button id="newRootBtn" class="primary" title="New top-level topic (N)">+ New Topic</button>
+      <button id="addAnswerBtn" class="soft" title="Add answer to the active question (A)">+ Answer</button>
+      <button id="addQuestionBtn" class="soft" title="Add a custom question to the selected card (Q)">+ Custom Question</button>
       <button id="toggleTopicsBtn" class="soft" title="Hide or show the Top-Level Topics strip">Hide Topics</button>
       <button id="toggleSidebarBtn" class="icon-btn" title="Toggle outline sidebar" aria-label="Toggle outline sidebar">☰</button>
     </div>
@@ -28,16 +29,30 @@
     <div class="toolbar-group" role="toolbar" aria-label="View controls">
       <button id="boardViewBtn" class="soft">Board</button>
       <button id="outlineViewBtn" class="soft">Outline</button>
+      <select id="themeSelect" title="Color theme" aria-label="Color theme">
+        <option value="modern">Modern</option>
+        <option value="sticky">Sticky Notes</option>
+        <option value="playful">Playful</option>
+        <option value="minimal">Minimal</option>
+      </select>
     </div>
 
     <div class="toolbar-group" role="toolbar" aria-label="History">
-      <button id="undoBtn" class="soft" title="Undo (Ctrl/Cmd+Z)" style="font-size:1.1rem;">↶</button>
-      <button id="redoBtn" class="soft" title="Redo (Ctrl/Cmd+Shift+Z)" style="font-size:1.1rem;">↷</button>
+      <button id="undoBtn" class="soft" title="Undo (Ctrl/Cmd+Z)">Undo</button>
+      <button id="redoBtn" class="soft" title="Redo (Ctrl/Cmd+Shift+Z)">Redo</button>
+      <button id="resetZoomBtn" class="soft" title="Reset canvas to default zoom and position">Reset Zoom</button>
+      <button id="arrangeBtn" class="soft" title="Reset all card positions to the auto-layout">Arrange</button>
+      <button id="copyOutlineBtn" class="soft">Copy Outline</button>
     </div>
 
-    <div class="toolbar-group actions-wrap" role="toolbar" aria-label="Actions">
-      <button id="actionsBtn" class="soft" aria-haspopup="true">Actions ▾</button>
-      <div id="actionsDropdown" class="examples-dropdown" role="menu"></div>
+    <div class="toolbar-group" role="toolbar" aria-label="Data">
+      <button id="exportJsonBtn" class="soft">Export JSON</button>
+      <button id="importJsonBtn" class="soft">Import JSON</button>
+      <div class="examples-wrap">
+        <button id="examplesBtn" class="soft" aria-haspopup="true">Examples ▾</button>
+        <div id="examplesDropdown" class="examples-dropdown" role="menu"></div>
+      </div>
+      <button id="clearBtn" class="soft">Reset</button>
     </div>
 
     <div class="search-box" role="search" title="Search items, questions, and sources">
@@ -100,21 +115,6 @@
       <div id="boardView" class="canvas-viewport" role="region" aria-label="Strategy board">
         <svg id="connectionLayer" class="connection-svg" aria-hidden="true"></svg>
         <div id="canvasWorld" class="canvas-world"></div>
-
-        <!-- Zoom controls -->
-        <div id="zoomBar" class="zoom-bar" aria-label="Zoom controls">
-          <button id="zoomInBtn"  class="zoom-btn" title="Zoom in">＋</button>
-          <button id="zoomOutBtn" class="zoom-btn" title="Zoom out">－</button>
-          <button id="zoomFitBtn" class="zoom-btn" title="Fit all nodes in view">⊡</button>
-          <button id="resetZoomBtn" class="zoom-btn" title="Reset zoom to 100%">1×</button>
-        </div>
-
-        <!-- Canvas legend -->
-        <div id="canvasLegend" class="canvas-legend" aria-hidden="true">
-          <span class="legend-item legend-topic">Topic</span>
-          <span class="legend-item legend-question">Question</span>
-          <span class="legend-item legend-answer">Answer</span>
-        </div>
       </div>
 
       <section id="outlineView" class="panel hidden" aria-label="Outline workspace">
@@ -141,7 +141,7 @@
       <div class="panel-header">
         <div>
           <div class="panel-title" id="modalTitle">Import JSON</div>
-          <div class="panel-subtitle" id="modalSubtitle">Paste a Socrates App JSON snapshot to restore your board.</div>
+          <div class="panel-subtitle" id="modalSubtitle">Paste a StrategyFractal JSON snapshot to restore your board.</div>
         </div>
         <button id="closeModalBtn" class="icon-btn" aria-label="Close modal">×</button>
       </div>

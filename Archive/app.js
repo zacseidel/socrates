@@ -23,13 +23,20 @@
     canvasWorld: document.getElementById('canvasWorld'),
     connectionLayer: document.getElementById('connectionLayer'),
     newRootBtn: document.getElementById('newRootBtn'),
+    addQuestionBtn: document.getElementById('addQuestionBtn'),
+    addAnswerBtn: document.getElementById('addAnswerBtn'),
     toggleTopicsBtn: document.getElementById('toggleTopicsBtn'),
     toggleSidebarBtn: document.getElementById('toggleSidebarBtn'),
     collapseSidebarInnerBtn: document.getElementById('collapseSidebarInnerBtn'),
     boardViewBtn: document.getElementById('boardViewBtn'),
     outlineViewBtn: document.getElementById('outlineViewBtn'),
+    themeSelect: document.getElementById('themeSelect'),
     undoBtn: document.getElementById('undoBtn'),
     redoBtn: document.getElementById('redoBtn'),
+    copyOutlineBtn: document.getElementById('copyOutlineBtn'),
+    exportJsonBtn: document.getElementById('exportJsonBtn'),
+    importJsonBtn: document.getElementById('importJsonBtn'),
+    clearBtn: document.getElementById('clearBtn'),
     searchInput: document.getElementById('searchInput'),
     downloadTextBtn: document.getElementById('downloadTextBtn'),
     modalBackdrop: document.getElementById('modalBackdrop'),
@@ -38,12 +45,10 @@
     modalTextarea: document.getElementById('modalTextarea'),
     modalActions: document.getElementById('modalActions'),
     closeModalBtn: document.getElementById('closeModalBtn'),
+    examplesBtn: document.getElementById('examplesBtn'),
+    examplesDropdown: document.getElementById('examplesDropdown'),
     resetZoomBtn: document.getElementById('resetZoomBtn'),
-    zoomInBtn: document.getElementById('zoomInBtn'),
-    zoomOutBtn: document.getElementById('zoomOutBtn'),
-    zoomFitBtn: document.getElementById('zoomFitBtn'),
-    actionsBtn: document.getElementById('actionsBtn'),
-    actionsDropdown: document.getElementById('actionsDropdown'),
+    arrangeBtn: document.getElementById('arrangeBtn'),
   };
 
   let state = loadState() || createInitialState();
@@ -282,11 +287,8 @@
   }
 
   function setFocusedNode(itemId) {
-    const prev = state.entities.items[state.ui.selectedItemId];
-    if (prev && prev.id !== itemId) prev.nodeMode = 'collapsed';
     state.ui.selectedItemId = itemId;
     persist();
-    renderCanvas();
     renderRootLane();
     renderOutlineTree();
     renderOutlineText();
@@ -599,6 +601,7 @@
         <div class="node-dot" style="background:${dotColor};"></div>
         <div class="node-topic-card ${chipActive}">
           <div class="node-card-header">
+            <span class="chip blank" style="font-size:0.78rem;">Topic</span>
             <div class="node-chrome" style="display:flex;gap:6px;align-items:center;">
               <button type="button" class="soft" style="padding:5px 10px;font-size:0.78rem;" data-action="collapse">Collapse</button>
               <button type="button" class="soft" style="padding:5px 10px;font-size:0.78rem;" data-action="delete-item">Delete</button>
@@ -996,41 +999,6 @@
 
   function resetZoom() {
     setCanvasTransform(60, 60, 1.0);
-    renderCanvas();
-  }
-
-  function zoomAtCenter(factor) {
-    const vw = els.boardView.offsetWidth;
-    const vh = els.boardView.offsetHeight;
-    const cx = vw / 2;
-    const cy = vh / 2;
-    const { panX, panY, scale } = state.ui.canvas;
-    const newScale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, scale * factor));
-    const actualFactor = newScale / scale;
-    state.ui.canvas.panX = cx - (cx - panX) * actualFactor;
-    state.ui.canvas.panY = cy - (cy - panY) * actualFactor;
-    state.ui.canvas.scale = newScale;
-  }
-
-  function fitView() {
-    const layout = computeLayout();
-    if (layout.size === 0) return;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    layout.forEach(pos => {
-      minX = Math.min(minX, pos.x);
-      minY = Math.min(minY, pos.y);
-      maxX = Math.max(maxX, pos.x + pos.w);
-      maxY = Math.max(maxY, pos.y + pos.h);
-    });
-    const PAD = 60;
-    const vw = els.boardView.offsetWidth;
-    const vh = els.boardView.offsetHeight;
-    const contentW = maxX - minX + PAD * 2;
-    const contentH = maxY - minY + PAD * 2;
-    const scale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.min(vw / contentW, vh / contentH)));
-    const panX = (vw - (maxX + minX) * scale) / 2;
-    const panY = (vh - (maxY + minY) * scale) / 2;
-    setCanvasTransform(panX, panY, scale);
     renderCanvas();
   }
 
@@ -1552,6 +1520,7 @@
   function render() {
     normalizeState();
     document.body.className = 'theme-' + (state.settings.theme || 'modern');
+    els.themeSelect.value = state.settings.theme || 'modern';
     els.searchInput.value = state.ui.search || '';
     renderSidebarState();
     renderTopTopicsState();
@@ -1566,6 +1535,7 @@
   function updateButtons() {
     els.undoBtn.disabled = !state.history.past.length;
     els.redoBtn.disabled = !state.history.future.length;
+    els.addAnswerBtn.disabled = !state.ui.activeQuestionId;
     els.selectionPill.textContent = getSelectedItem() ? itemLabel(getSelectedItem()) : 'No selection';
   }
 
@@ -1732,7 +1702,7 @@
 
   function exportJson() {
     const payload = deepClone(state);
-    download('socrates-app.json', JSON.stringify(payload, null, 2), 'application/json;charset=utf-8');
+    download('strategyfractal.json', JSON.stringify(payload, null, 2), 'application/json;charset=utf-8');
   }
 
   function importJson(raw) {
@@ -1781,80 +1751,32 @@
     return examplesManifest;
   }
 
-  function closeActionsDropdown() {
-    els.actionsDropdown.classList.remove('open');
-  }
-
-  function addActionItem(dropdown, label, onClick, isDanger) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'examples-dropdown-item' + (isDanger ? ' action-danger' : '');
-    btn.textContent = label;
-    btn.addEventListener('click', () => { closeActionsDropdown(); onClick(); });
-    dropdown.appendChild(btn);
-  }
-
-  function addActionSep(dropdown) {
-    const hr = document.createElement('hr');
-    hr.className = 'action-sep';
-    dropdown.appendChild(hr);
-  }
-
-  async function toggleActionsDropdown() {
-    const dropdown = els.actionsDropdown;
+  async function toggleExamplesDropdown() {
+    const dropdown = els.examplesDropdown;
     if (dropdown.classList.contains('open')) {
-      closeActionsDropdown();
+      dropdown.classList.remove('open');
       return;
     }
-    dropdown.innerHTML = '';
-    addActionItem(dropdown, 'Arrange Layout', arrangeLayout);
-    addActionItem(dropdown, 'Reset Zoom', resetZoom);
-    addActionSep(dropdown);
-    addActionItem(dropdown, 'Copy Outline', () => copyToClipboard(generateBreadthThenDrillOutline(), 'Outline copied.'));
-    addActionItem(dropdown, 'Download .txt', () => download('socrates-app-outline.txt', generateBreadthThenDrillOutline()));
-    addActionSep(dropdown);
-    addActionItem(dropdown, 'Export JSON', exportJson);
-    addActionItem(dropdown, 'Import JSON', () => openModal({
-      title: 'Import Socrates App JSON',
-      subtitle: 'Paste a previously exported JSON payload to resume a session.',
-      actions: [
-        { label: 'Import', primary: true, onClick: importJson },
-        { label: 'Cancel', onClick: closeModal },
-      ],
-    }));
-    addActionSep(dropdown);
-    // Examples sub-section: loaded inline
-    const exLabel = document.createElement('div');
-    exLabel.className = 'examples-dropdown-message';
-    exLabel.style.cssText = 'padding:6px 16px 2px;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;';
-    exLabel.textContent = 'Load Example';
-    dropdown.appendChild(exLabel);
-    const examples = await loadExamplesManifest();
-    if (!examples.length) {
-      const msg = document.createElement('div');
-      msg.className = 'examples-dropdown-message';
-      msg.textContent = 'No examples available.';
-      dropdown.appendChild(msg);
-    } else {
-      examples.forEach(ex => addActionItem(dropdown, ex.name, () => loadExample(ex.file, ex.name)));
-    }
-    addActionSep(dropdown);
-    addActionItem(dropdown, 'Reset Board', clearBoard, true);
-    addActionSep(dropdown);
-    // Theme section at bottom
-    const themeLabel = document.createElement('div');
-    themeLabel.className = 'examples-dropdown-message';
-    themeLabel.style.cssText = 'padding:6px 16px 2px;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;';
-    themeLabel.textContent = 'Theme';
-    dropdown.appendChild(themeLabel);
-    const current = state.settings.theme || 'modern';
-    [['modern', 'Modern'], ['sticky', 'Sticky Notes'], ['playful', 'Playful'], ['minimal', 'Minimal']].forEach(([val, label]) => {
-      addActionItem(dropdown, (val === current ? '\u2713 ' : '  ') + label, () => setTheme(val));
-    });
+    dropdown.innerHTML = '<div class="examples-dropdown-message">Loading…</div>';
     dropdown.classList.add('open');
+    const examples = await loadExamplesManifest();
+    dropdown.innerHTML = '';
+    if (!examples.length) {
+      dropdown.innerHTML = '<div class="examples-dropdown-message">No examples available.</div>';
+      return;
+    }
+    examples.forEach(example => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'examples-dropdown-item';
+      btn.textContent = example.name;
+      btn.addEventListener('click', () => loadExample(example.file, example.name));
+      dropdown.appendChild(btn);
+    });
   }
 
-    async function loadExample(file, name) {
+  async function loadExample(file, name) {
+    els.examplesDropdown.classList.remove('open');
     const doLoad = async () => {
       try {
         const res = await fetch(`examples/${file}`);
@@ -1880,24 +1802,34 @@
 
   function setupEvents() {
     els.newRootBtn.addEventListener('click', addRoot);
+    els.addQuestionBtn.addEventListener('click', () => {
+      const item = getSelectedItem();
+      if (item) addCustomQuestion(item.id, '');
+    });
+    els.addAnswerBtn.addEventListener('click', () => {
+      if (state.ui.activeQuestionId) addAnswerToQuestion(state.ui.activeQuestionId);
+    });
     els.toggleTopicsBtn.addEventListener('click', () => toggleTopTopics());
     els.toggleSidebarBtn.addEventListener('click', () => toggleSidebar());
     els.collapseSidebarInnerBtn.addEventListener('click', () => toggleSidebar(false));
     els.boardViewBtn.addEventListener('click', () => setMainView('board'));
     els.outlineViewBtn.addEventListener('click', () => setMainView('outline'));
+    els.themeSelect.addEventListener('change', e => setTheme(e.target.value));
     els.undoBtn.addEventListener('click', undo);
     els.redoBtn.addEventListener('click', redo);
-    els.resetZoomBtn?.addEventListener('click', resetZoom);
-    els.zoomInBtn?.addEventListener('click', () => { zoomAtCenter(1.25); renderCanvas(); });
-    els.zoomOutBtn?.addEventListener('click', () => { zoomAtCenter(0.8); renderCanvas(); });
-    els.zoomFitBtn?.addEventListener('click', fitView);
-    els.actionsBtn.addEventListener('click', e => { e.stopPropagation(); toggleActionsDropdown(); });
-    document.addEventListener('click', e => {
-      if (!els.actionsDropdown.classList.contains('open')) return;
-      if (!els.actionsBtn.contains(e.target) && !els.actionsDropdown.contains(e.target)) {
-        closeActionsDropdown();
-      }
-    });
+    els.resetZoomBtn.addEventListener('click', resetZoom);
+    els.arrangeBtn?.addEventListener('click', arrangeLayout);
+    els.copyOutlineBtn.addEventListener('click', () => copyToClipboard(generateBreadthThenDrillOutline(), 'Outline copied.'));
+    els.exportJsonBtn.addEventListener('click', exportJson);
+    els.importJsonBtn.addEventListener('click', () => openModal({
+      title: 'Import StrategyFractal JSON',
+      subtitle: 'Paste a previously exported JSON payload to resume a session.',
+      actions: [
+        { label: 'Import', primary: true, onClick: importJson },
+        { label: 'Cancel', onClick: closeModal },
+      ],
+    }));
+    els.clearBtn.addEventListener('click', clearBoard);
     els.searchInput.addEventListener('input', e => {
       state.ui.search = e.target.value;
       persist();
@@ -1905,10 +1837,20 @@
       renderOutlineTree();
       renderOutlineText();
     });
-    els.downloadTextBtn.addEventListener('click', () => download('socrates-app-outline.txt', generateBreadthThenDrillOutline()));
+    els.downloadTextBtn.addEventListener('click', () => download('strategyfractal-outline.txt', generateBreadthThenDrillOutline()));
     els.closeModalBtn.addEventListener('click', closeModal);
     els.modalBackdrop.addEventListener('click', e => {
       if (e.target === els.modalBackdrop) closeModal();
+    });
+    els.examplesBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      toggleExamplesDropdown();
+    });
+    document.addEventListener('click', e => {
+      if (!els.examplesDropdown.classList.contains('open')) return;
+      if (!els.examplesBtn.contains(e.target) && !els.examplesDropdown.contains(e.target)) {
+        els.examplesDropdown.classList.remove('open');
+      }
     });
 
     document.addEventListener('keydown', e => {

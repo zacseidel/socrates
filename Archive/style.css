@@ -98,16 +98,13 @@
 
     .topbar {
       display: flex;
-      flex-wrap: nowrap;
-      gap: 8px;
+      flex-wrap: wrap;
+      gap: 10px;
       align-items: center;
-      padding: 10px 16px;
+      padding: 14px 18px;
       background: rgba(255,255,255,0.6);
       backdrop-filter: blur(16px);
       border-bottom: 1px solid var(--border);
-      overflow: visible;
-      position: relative;
-      z-index: 200;
     }
 
     .brand {
@@ -121,10 +118,13 @@
       width: 42px;
       height: 42px;
       border-radius: 16px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
       box-shadow: var(--shadow);
-      object-fit: cover;
-      display: block;
-      flex-shrink: 0;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-weight: 800;
+      letter-spacing: 0.02em;
     }
 
     .brand h1 { margin: 0; font-size: 1.2rem; }
@@ -134,8 +134,7 @@
       display: flex;
       gap: 8px;
       align-items: center;
-      flex-wrap: nowrap;
-      flex-shrink: 0;
+      flex-wrap: wrap;
       padding: 6px;
       border: 1px solid var(--border);
       background: var(--surface);
@@ -146,10 +145,6 @@
     button, select, input, textarea {
       font: inherit;
       color: inherit;
-    }
-
-    .topbar button, .topbar select {
-      font-size: 0.78rem;
     }
 
     button, .ghost-input {
@@ -328,70 +323,6 @@
       z-index: 0;
     }
 
-    /* ── Zoom bar ── */
-
-    .zoom-bar {
-      position: absolute;
-      bottom: 16px;
-      right: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      z-index: 20;
-    }
-
-    .zoom-btn {
-      width: 30px;
-      height: 30px;
-      border-radius: 6px;
-      border: 1px solid var(--border, #ccc);
-      background: var(--surface, #fff);
-      color: var(--fg, #333);
-      font-size: 14px;
-      font-weight: 500;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-      line-height: 1;
-      transition: opacity 0.12s;
-    }
-
-    .zoom-btn:hover { opacity: 0.75; }
-
-    /* ── Canvas legend ── */
-
-    .canvas-legend {
-      position: absolute;
-      bottom: 16px;
-      left: 16px;
-      display: flex;
-      gap: 10px;
-      z-index: 20;
-      font-size: 11px;
-      opacity: 0.6;
-    }
-
-    .legend-item {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
-
-    .legend-item::before {
-      content: '';
-      display: inline-block;
-      width: 10px;
-      height: 10px;
-      border-radius: 3px;
-      border: 1.5px solid currentColor;
-    }
-
-    .legend-topic    { color: var(--accent); }
-    .legend-question { color: var(--muted); }
-    .legend-answer   { color: var(--accent-2); }
-
     /* ── Panels (sidebar sections, outline, modal) ── */
 
     .panel {
@@ -525,7 +456,6 @@
       gap: 6px;
     }
 
-    .node-topic-card:hover .node-question-buttons,
     .node-topic-card.is-active .node-question-buttons,
     .node-topic-card:focus-within .node-question-buttons { display: flex; }
 
@@ -665,7 +595,6 @@
       padding-left: 12px;
     }
 
-    .answer-bullet:hover .answer-bullet-actions,
     .answer-bullet:focus-within .answer-bullet-actions { display: flex; }
 
     /* Question header delete button */
@@ -1040,7 +969,6 @@
     /* ── Examples dropdown ── */
 
     .examples-wrap { position: relative; }
-    .actions-wrap  { position: relative; }
 
     .examples-dropdown {
       display: none;
@@ -1080,15 +1008,6 @@
       color: var(--muted);
       font-size: 0.86rem;
     }
-
-    .action-sep {
-      border: none;
-      border-top: 1px solid var(--border);
-      margin: 4px 0;
-    }
-
-    .action-danger { color: #d04040; }
-    .action-danger:hover { background: rgba(208, 64, 64, 0.08) !important; }
 
     .hidden { display: none !important; }
 

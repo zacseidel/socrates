@@ -1,0 +1,183 @@
+{
+  "version": 2,
+  "settings": {
+    "theme": "modern",
+    "mainView": "board",
+    "sidebarOpen": true,
+    "showTopTopics": true
+  },
+  "ui": {
+    "selectedItemId": "item-launch",
+    "activeQuestionId": "q-why",
+    "search": ""
+  },
+  "roots": ["item-launch"],
+  "entities": {
+    "items": {
+      "item-launch": {
+        "id": "item-launch",
+        "kind": "topic",
+        "text": "Product Launch Strategy",
+        "questionIds": ["q-why", "q-what", "q-how", "q-who"],
+        "parentQuestionId": null,
+        "sourceList": [],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      "item-why1": {
+        "id": "item-why1",
+        "kind": "answer",
+        "text": "Capture market share before competitors ship similar features",
+        "questionIds": [],
+        "parentQuestionId": "q-why",
+        "sourceList": [
+          { "id": "src-why1a", "label": "Competitor Analysis Q3", "url": "", "note": "Three direct competitors announced similar features in roadmap previews" }
+        ],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      "item-why2": {
+        "id": "item-why2",
+        "kind": "answer",
+        "text": "Respond to high-demand feature requests surfaced in customer feedback",
+        "questionIds": [],
+        "parentQuestionId": "q-why",
+        "sourceList": [
+          { "id": "src-why2a", "label": "Q3 Customer Survey", "url": "", "note": "68% of surveyed users listed this as their top requested feature" }
+        ],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      "item-what1": {
+        "id": "item-what1",
+        "kind": "answer",
+        "text": "Mobile app redesign with AI-assisted onboarding flow",
+        "questionIds": ["q-what1-how"],
+        "parentQuestionId": "q-what",
+        "sourceList": [],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      "item-what2": {
+        "id": "item-what2",
+        "kind": "answer",
+        "text": "New SMB pricing tier with self-serve billing and usage-based scaling",
+        "questionIds": [],
+        "parentQuestionId": "q-what",
+        "sourceList": [
+          { "id": "src-what2a", "label": "Pricing Research", "url": "", "note": "Validated with 12 SMB customer interviews in September" }
+        ],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      "item-how1": {
+        "id": "item-how1",
+        "kind": "answer",
+        "text": "Phased rollout: closed beta (500 users) → open beta → GA over 8 weeks",
+        "questionIds": [],
+        "parentQuestionId": "q-how",
+        "sourceList": [],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      "item-how2": {
+        "id": "item-how2",
+        "kind": "answer",
+        "text": "Co-marketing with 3 industry newsletters and 2 analyst firms at launch",
+        "questionIds": [],
+        "parentQuestionId": "q-how",
+        "sourceList": [],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      "item-who1": {
+        "id": "item-who1",
+        "kind": "answer",
+        "text": "Primary: Tech-forward SMB owners and founders (28–45) managing 5–50 person teams",
+        "questionIds": [],
+        "parentQuestionId": "q-who",
+        "sourceList": [],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      "item-who2": {
+        "id": "item-who2",
+        "kind": "answer",
+        "text": "Secondary: Operations and project managers at mid-market companies evaluating new tooling",
+        "questionIds": [],
+        "parentQuestionId": "q-who",
+        "sourceList": [],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      "item-what1-how1": {
+        "id": "item-what1-how1",
+        "kind": "answer",
+        "text": "Contract UX agency for redesign sprints; internal eng team owns AI integration",
+        "questionIds": [],
+        "parentQuestionId": "q-what1-how",
+        "sourceList": [],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      "item-what1-how2": {
+        "id": "item-what1-how2",
+        "kind": "answer",
+        "text": "Ship behind feature flag; rollback plan documented and tested before beta opens",
+        "questionIds": [],
+        "parentQuestionId": "q-what1-how",
+        "sourceList": [],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      }
+    },
+    "questions": {
+      "q-why": {
+        "id": "q-why",
+        "parentItemId": "item-launch",
+        "label": "Why",
+        "answerIds": ["item-why1", "item-why2"],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      "q-what": {
+        "id": "q-what",
+        "parentItemId": "item-launch",
+        "label": "What",
+        "answerIds": ["item-what1", "item-what2"],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      "q-how": {
+        "id": "q-how",
+        "parentItemId": "item-launch",
+        "label": "How",
+        "answerIds": ["item-how1", "item-how2"],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      "q-who": {
+        "id": "q-who",
+        "parentItemId": "item-launch",
+        "label": "Who",
+        "answerIds": ["item-who1", "item-who2"],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      "q-what1-how": {
+        "id": "q-what1-how",
+        "parentItemId": "item-what1",
+        "label": "How",
+        "answerIds": ["item-what1-how1", "item-what1-how2"],
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      }
+    }
+  },
+  "history": { "past": [], "future": [] },
+  "meta": {
+    "createdAt": 1700000000000,
+    "updatedAt": 1700000000000,
+    "lastSavedAt": 1700000000000
+  }
+}
