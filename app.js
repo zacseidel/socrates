@@ -12,9 +12,6 @@
 
   const els = {
     workspace: document.getElementById('workspace'),
-    topTopicsPanel: document.getElementById('topTopicsPanel'),
-    rootLane: document.getElementById('rootLane'),
-    outlineTree: document.getElementById('outlineTree'),
     outlineText: document.getElementById('outlineText'),
     outlineViewText: document.getElementById('outlineViewText'),
     selectionPill: document.getElementById('selectionPill'),
@@ -22,8 +19,6 @@
     outlineView: document.getElementById('outlineView'),
     canvasWorld: document.getElementById('canvasWorld'),
     connectionLayer: document.getElementById('connectionLayer'),
-    newRootBtn: document.getElementById('newRootBtn'),
-    toggleTopicsBtn: document.getElementById('toggleTopicsBtn'),
     toggleSidebarBtn: document.getElementById('toggleSidebarBtn'),
     collapseSidebarInnerBtn: document.getElementById('collapseSidebarInnerBtn'),
     boardViewBtn: document.getElementById('boardViewBtn'),
@@ -31,6 +26,7 @@
     undoBtn: document.getElementById('undoBtn'),
     redoBtn: document.getElementById('redoBtn'),
     searchInput: document.getElementById('searchInput'),
+    copyOutlineBtn: document.getElementById('copyOutlineBtn'),
     downloadTextBtn: document.getElementById('downloadTextBtn'),
     modalBackdrop: document.getElementById('modalBackdrop'),
     modalTitle: document.getElementById('modalTitle'),
@@ -223,6 +219,14 @@
     }
   }
 
+  let persistTimer = null;
+  // Coalesce rapid writes (e.g. typing in a source field or the search box)
+  // so we don't serialize the whole board on every keystroke.
+  function schedulePersist(delay = 400) {
+    clearTimeout(persistTimer);
+    persistTimer = setTimeout(persist, delay);
+  }
+
   function loadState() {
     try {
       const rawV2 = localStorage.getItem(STORAGE_KEY);
@@ -259,10 +263,6 @@
     return 'custom';
   }
 
-  function isDefaultQuestionLabel(label) {
-    return DEFAULT_QUESTIONS.some(q => normalizeLabel(q) === normalizeLabel(label));
-  }
-
   function itemLabel(item) {
     const text = (item?.text || '').trim();
     return text || (item?.kind === 'topic' ? 'Untitled topic' : 'Untitled answer');
@@ -272,23 +272,12 @@
     return state.entities.items[state.ui.selectedItemId] || null;
   }
 
-  function findQuestionByLabel(parentItemId, label) {
-    const item = state.entities.items[parentItemId];
-    if (!item) return null;
-    const target = normalizeLabel(label);
-    return item.questionIds
-      .map(id => state.entities.questions[id])
-      .find(q => normalizeLabel(q?.label) === target) || null;
-  }
-
   function setFocusedNode(itemId) {
     const prev = state.entities.items[state.ui.selectedItemId];
     if (prev && prev.id !== itemId) prev.nodeMode = 'collapsed';
     state.ui.selectedItemId = itemId;
     persist();
     renderCanvas();
-    renderRootLane();
-    renderOutlineTree();
     renderOutlineText();
     updateButtons();
   }
@@ -339,27 +328,6 @@
     return question.answerIds
       .map(id => state.entities.items[id])
       .filter(answer => answer && isItemMeaningful(answer));
-  }
-
-  function countMeaningfulDescendants(itemId) {
-    const item = state.entities.items[itemId];
-    if (!item) return 0;
-    let count = 0;
-    item.questionIds.forEach(qid => {
-      const q = state.entities.questions[qid];
-      if (!q) return;
-      q.answerIds.forEach(ansId => {
-        const answer = state.entities.items[ansId];
-        if (answer && isItemMeaningful(answer)) {
-          count += 1 + countMeaningfulDescendants(ansId);
-        }
-      });
-    });
-    return count;
-  }
-
-  function countInstantiatedQuestions(item) {
-    return item.questionIds.filter(qid => state.entities.questions[qid]).length;
   }
 
   // ── Layout engine ─────────────────────────────────────────────────────────
@@ -587,7 +555,7 @@
         </div>
       `;
     } else {
-      // Build spawn buttons — show which default questions already exist
+      // Build spawn buttons for the default question types
       const spawnBtns = DEFAULT_QUESTIONS.map(label => {
         const cls = colorClassForLabel(label);
         return `<button type="button" class="spawn-btn ${cls}" data-spawn="${escapeHtml(label)}" title="Add ${escapeHtml(label)} branch">${escapeHtml(label)}</button>`;
@@ -718,6 +686,12 @@
             }, 0);
           });
         }
+        // Keep focus in the answer field when the branch/delete buttons are
+        // pressed. Buttons don't take focus on click in Safari/Firefox, so
+        // without this the field blurs and the actions hide (display:none)
+        // before the click lands, swallowing the spawn/delete.
+        const actionsEl = bulletEl.querySelector('.answer-bullet-actions');
+        if (actionsEl) actionsEl.addEventListener('mousedown', e => e.preventDefault());
         const dragType = 'a-' + question.id;
         bulletEl.dataset.dragType = dragType;
         bulletEl.draggable = true;
@@ -786,7 +760,7 @@
     }
     if (spawnCustom) {
       e.stopPropagation();
-      addCustomQuestion(item.id, '');
+      addCustomQuestion(item.id);
       return;
     }
     if (e.target.closest('[data-action="delete-source"]')) {
@@ -834,7 +808,7 @@
     if (childSpawnCustom) {
       e.stopPropagation();
       const answerId = e.target.closest('[data-answer-id]')?.dataset?.answerId;
-      if (answerId) addCustomQuestion(answerId, '');
+      if (answerId) addCustomQuestion(answerId);
       return;
     }
     if (deleteAnswerId) {
@@ -891,6 +865,50 @@
     if (scale >= 0.6) els.canvasWorld.classList.add('fidelity-full');
     else if (scale >= 0.3) els.canvasWorld.classList.add('fidelity-medium');
     else els.canvasWorld.classList.add('fidelity-abstract');
+    updateZoomReadout();
+  }
+
+  function updateZoomReadout() {
+    if (els.resetZoomBtn) els.resetZoomBtn.textContent = Math.round(state.ui.canvas.scale * 100) + '%';
+  }
+
+  const clampScale = s => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, s));
+
+  // Briefly enable a CSS transition so stepped (button/hotkey) zoom glides;
+  // wheel and drag stay instant so they track the input 1:1.
+  let zoomAnimTimer = null;
+  function animateTransformOnce() {
+    els.canvasWorld.classList.add('zoom-animating');
+    els.connectionLayer.classList.add('zoom-animating');
+    clearTimeout(zoomAnimTimer);
+    zoomAnimTimer = setTimeout(() => {
+      els.canvasWorld.classList.remove('zoom-animating');
+      els.connectionLayer.classList.remove('zoom-animating');
+    }, 180);
+  }
+
+  function schedulePersistCanvas() {
+    clearTimeout(canvasPersistTimer);
+    canvasPersistTimer = setTimeout(persist, 300);
+  }
+
+  // Zoom while keeping the given viewport point fixed under the cursor.
+  function zoomToPoint(px, py, factor) {
+    const { panX, panY, scale } = state.ui.canvas;
+    const newScale = clampScale(scale * factor);
+    const actual = newScale / scale;
+    state.ui.canvas.panX = px - (px - panX) * actual;
+    state.ui.canvas.panY = py - (py - panY) * actual;
+    state.ui.canvas.scale = newScale;
+    applyTransform();
+    updateFidelityClass();
+  }
+
+  // Stepped zoom (buttons + hotkeys), anchored at the viewport center, eased.
+  function zoomStep(factor) {
+    animateTransformOnce();
+    zoomToPoint(els.boardView.offsetWidth / 2, els.boardView.offsetHeight / 2, factor);
+    schedulePersistCanvas();
   }
 
   function setCanvasTransform(panX, panY, scale) {
@@ -904,20 +922,24 @@
 
   function handleWheel(e) {
     e.preventDefault();
-    const rect = els.boardView.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    const zoomFactor = e.deltaY < 0 ? 1.1 : 0.909;
-    const { panX, panY, scale } = state.ui.canvas;
-    const newScale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, scale * zoomFactor));
-    const actualFactor = newScale / scale;
-    state.ui.canvas.panX = mouseX - (mouseX - panX) * actualFactor;
-    state.ui.canvas.panY = mouseY - (mouseY - panY) * actualFactor;
-    state.ui.canvas.scale = newScale;
-    applyTransform();
-    updateFidelityClass();
-    clearTimeout(canvasPersistTimer);
-    canvasPersistTimer = setTimeout(persist, 300);
+    const lineScale = e.deltaMode === 1 ? 16 : 1; // normalize line-mode wheels
+    if (e.ctrlKey || e.metaKey) {
+      // Trackpad pinch (the browser sets ctrlKey) or Cmd/Ctrl + wheel: zoom to
+      // the cursor. Proportional to delta so a pinch feels smooth.
+      const rect = els.boardView.getBoundingClientRect();
+      const factor = Math.exp(-e.deltaY * lineScale * 0.0015);
+      zoomToPoint(e.clientX - rect.left, e.clientY - rect.top, factor);
+    } else {
+      // Plain scroll / two-finger drag: pan. Shift maps a vertical-only wheel
+      // to horizontal panning.
+      let dx = e.deltaX * lineScale;
+      let dy = e.deltaY * lineScale;
+      if (e.shiftKey && dx === 0) { dx = dy; dy = 0; }
+      state.ui.canvas.panX -= dx;
+      state.ui.canvas.panY -= dy;
+      applyTransform();
+    }
+    schedulePersistCanvas();
   }
 
   function startNodeDrag(e, questionId, nodeEl, pos) {
@@ -1008,21 +1030,8 @@
   }
 
   function resetZoom() {
+    animateTransformOnce();
     setCanvasTransform(60, 60, 1.0);
-    renderCanvas();
-  }
-
-  function zoomAtCenter(factor) {
-    const vw = els.boardView.offsetWidth;
-    const vh = els.boardView.offsetHeight;
-    const cx = vw / 2;
-    const cy = vh / 2;
-    const { panX, panY, scale } = state.ui.canvas;
-    const newScale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, scale * factor));
-    const actualFactor = newScale / scale;
-    state.ui.canvas.panX = cx - (cx - panX) * actualFactor;
-    state.ui.canvas.panY = cy - (cy - panY) * actualFactor;
-    state.ui.canvas.scale = newScale;
   }
 
   function fitView() {
@@ -1043,8 +1052,8 @@
     const scale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.min(vw / contentW, vh / contentH)));
     const panX = (vw - (maxX + minX) * scale) / 2;
     const panY = (vh - (maxY + minY) * scale) / 2;
+    animateTransformOnce();
     setCanvasTransform(panX, panY, scale);
-    renderCanvas();
   }
 
   function zoomToNode(nodeId) {
@@ -1056,22 +1065,11 @@
     const targetScale = 1.0;
     const panX = vw / 2 - (pos.x + pos.w / 2) * targetScale;
     const panY = vh / 2 - (pos.y + pos.h / 2) * targetScale;
+    animateTransformOnce();
     setCanvasTransform(panX, panY, targetScale);
-    renderCanvas();
   }
 
   // ── Node mutation helpers ─────────────────────────────────────────────────
-
-  function addRoot() {
-    pushHistory();
-    const item = createItemInternal(state, { kind: 'topic', text: '' });
-    item.nodeMode = 'expanded';
-    state.roots.push(item.id);
-    state.ui.selectedItemId = item.id;
-    persist();
-    render();
-    requestAnimationFrame(() => focusEditable(`[data-item-text="${item.id}"]`));
-  }
 
   function spawnQuestion(parentItemId, label) {
     const item = state.entities.items[parentItemId];
@@ -1091,34 +1089,23 @@
     });
   }
 
-  function addCustomQuestion(parentItemId, label) {
+  // Custom questions spawn a new card with a blank, editable title and drop the
+  // cursor straight into it — no naming popup — so the discussion can continue
+  // inline. An optional label lets callers pre-fill the title if they want.
+  function addCustomQuestion(parentItemId, label = '') {
     const item = state.entities.items[parentItemId];
     if (!item) return;
-    if (!label) {
-      openModal({
-        title: 'New Custom Question',
-        subtitle: 'Name this custom question branch.',
-        initialValue: 'Custom',
-        actions: [
-          { label: 'Add', primary: true, onClick: value => {
-            closeModal();
-            _commitAddCustomQuestion(parentItemId, (value || '').trim() || 'Custom');
-          }},
-          { label: 'Cancel', onClick: closeModal },
-        ],
-      });
-      return;
-    }
-    _commitAddCustomQuestion(parentItemId, (label || '').trim() || 'Custom');
-  }
-
-  function _commitAddCustomQuestion(parentItemId, chosen) {
     pushHistory();
-    const q = createQuestionInternal(state, parentItemId, chosen);
+    const q = createQuestionInternal(state, parentItemId, (label || '').trim());
     createItemInternal(state, { kind: 'answer', text: '', parentQuestionId: q.id });
     state.ui.activeQuestionId = q.id;
+    state.ui.selectedItemId = parentItemId;
     persist();
     render();
+    requestAnimationFrame(() => {
+      zoomToNode(q.id);
+      focusEditable(`[data-node-id="${q.id}"] [data-question-label="${q.id}"]`);
+    });
   }
 
   function addAnswerToQuestion(questionId) {
@@ -1168,8 +1155,6 @@
     item.text = text;
     item.updatedAt = Date.now();
     persist();
-    renderRootLane();
-    renderOutlineTree();
     renderOutlineText();
     updateButtons();
   }
@@ -1180,7 +1165,6 @@
     q.label = label;
     q.updatedAt = Date.now();
     persist();
-    renderOutlineTree();
     renderOutlineText();
     renderConnections(computeLayout());
   }
@@ -1261,7 +1245,7 @@
     if (!source) return;
     source[key] = value;
     item.updatedAt = Date.now();
-    persist();
+    schedulePersist();
   }
 
   function deleteSource(itemId, sourceId) {
@@ -1308,205 +1292,88 @@
     });
   }
 
-  // ── Root lane (topic strip) ───────────────────────────────────────────────
-
-  function renderRootLane() {
-    els.rootLane.innerHTML = '';
-    if (!state.roots.length) {
-      els.rootLane.innerHTML = '<div class="empty-state">No topics yet. Click <strong>+ New Topic</strong> to start.</div>';
-      return;
-    }
-    let visibleCount = 0;
-    state.roots.forEach((itemId, index) => {
-      const item = state.entities.items[itemId];
-      if (!item) return;
-      if (!filterMatchesItem(item)) return;
-      visibleCount += 1;
-      const branchCount = countMeaningfulDescendants(itemId);
-      const liveQuestions = countInstantiatedQuestions(item);
-      const card = document.createElement('div');
-      card.className = 'root-chip' + (state.ui.selectedItemId === itemId ? ' active' : '');
-      card.draggable = true;
-      card.dataset.dragType = 'roots';
-      card.dataset.id = itemId;
-      card.innerHTML = `
-        <div class="sort-row">
-          <div class="sort-left">
-            <div class="drag" title="Drag to reorder">⋮⋮</div>
-            <div class="root-chip-label" contenteditable="true" data-item-text="${item.id}"></div>
-          </div>
-          <small>#${index + 1}</small>
-        </div>
-        <small>${liveQuestions} question branch${liveQuestions === 1 ? '' : 'es'} • ${branchCount} populated descendant${branchCount === 1 ? '' : 's'}</small>
-      `;
-      card.addEventListener('click', e => {
-        if (e.target.closest('[data-item-text]')) return;
-        setFocusedNode(itemId);
-        zoomToNode(itemId);
-      });
-      wireDragAndDrop(card, state.roots, itemId, () => render());
-      els.rootLane.appendChild(card);
-
-      const labelEl = card.querySelector(`[data-item-text="${item.id}"]`);
-      setEditableContent(labelEl, item.text, 'Untitled topic');
-      labelEl.addEventListener('mousedown', e => e.stopPropagation());
-      labelEl.addEventListener('focus', () => {
-        pushHistoryOnce();
-        if (state.ui.selectedItemId !== itemId) {
-          state.ui.selectedItemId = itemId;
-          document.querySelectorAll('.root-chip').forEach(c =>
-            c.classList.toggle('active', c.dataset.id === itemId)
-          );
-          persist();
-        }
-        if (labelEl.dataset.empty === 'true') labelEl.textContent = '';
-      });
-      labelEl.addEventListener('keydown', e => {
-        if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') labelEl.blur();
-      });
-      labelEl.addEventListener('blur', () => updateItemText(itemId, getEditableText(labelEl)));
-      labelEl.addEventListener('input', () => toggleEditablePlaceholder(labelEl));
-    });
-    if (!visibleCount) {
-      els.rootLane.innerHTML = '<div class="empty-state">No matches for the current search.</div>';
-    }
-  }
-
-  // ── Outline tree ──────────────────────────────────────────────────────────
-
-  function renderOutlineTree() {
-    els.outlineTree.innerHTML = '';
-    if (!state.roots.length) {
-      els.outlineTree.innerHTML = '<div class="empty-state">Nothing on the board yet.</div>';
-      return;
-    }
-    const frag = document.createDocumentFragment();
-    state.roots.forEach(rootId => {
-      const item = state.entities.items[rootId];
-      if (!item || !filterMatchesItem(item)) return;
-      frag.appendChild(renderOutlineItem(item));
-    });
-    if (!frag.childNodes.length) {
-      els.outlineTree.innerHTML = '<div class="empty-state">No matches for the current search.</div>';
-    } else {
-      els.outlineTree.appendChild(frag);
-    }
-  }
-
-  function renderOutlineItem(item) {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'outline-node';
-    const row = document.createElement('div');
-    row.className = 'outline-item-row';
-    row.innerHTML = `
-      <button class="outline-select ${state.ui.selectedItemId === item.id ? 'active' : ''}">${escapeHtml(itemLabel(item))}</button>
-      <span class="pill">${item.kind}</span>
-      ${item.parentQuestionId ? `<span class="pill">via ${escapeHtml(state.entities.questions[item.parentQuestionId]?.label || 'question')}</span>` : '<span class="pill">top-level</span>'}
-    `;
-    row.querySelector('.outline-select').addEventListener('click', () => {
-      setFocusedNode(item.id);
-      zoomToNode(item.id);
-    });
-    wrapper.appendChild(row);
-
-    meaningfulQuestionsForItem(item).forEach(q => {
-      const qNode = document.createElement('div');
-      qNode.className = 'outline-node';
-      const cc = colorClassForLabel(q.label);
-      qNode.innerHTML = `
-        <div class="outline-question-row">
-          <button class="outline-select ${state.ui.activeQuestionId === q.id ? 'active' : ''}">? ${escapeHtml(q.label || 'Blank')}</button>
-          <span class="chip ${cc}">${escapeHtml(q.label || 'Blank')}</span>
-          <span class="pill">${meaningfulAnswersForQuestion(q).length}</span>
-        </div>
-      `;
-      qNode.querySelector('.outline-select').addEventListener('click', () => {
-        state.ui.activeQuestionId = q.id;
-        setFocusedNode(item.id);
-        zoomToNode(q.id);
-        persist();
-      });
-      meaningfulAnswersForQuestion(q).forEach(answer => {
-        qNode.appendChild(renderOutlineItem(answer));
-      });
-      wrapper.appendChild(qNode);
-    });
-    return wrapper;
-  }
+  // ── Outline text generation ───────────────────────────────────────────────
 
   function renderOutlineText() {
-    const text = generateBreadthThenDrillOutline();
+    const text = generateOutline();
     els.outlineText.textContent = text;
     els.outlineViewText.textContent = text;
   }
 
-  // ── Outline text generation ───────────────────────────────────────────────
-
-  function generateBreadthThenDrillOutline() {
+  // "Overview then systematic dive" outline. At each element we first list its
+  // immediate children, then walk those children in order and expand any that
+  // themselves branch (pre-order depth-first, backtracking to siblings when a
+  // branch dead-ends). Every node prints at an indent equal to its depth and
+  // carries the same path-number both in its parent's child-list and as its own
+  // section header, so the deliberate repetition that makes a multi-threaded
+  // tree followable stays aligned column-for-column.
+  function generateOutline() {
     const roots = state.roots
       .map(id => state.entities.items[id])
       .filter(Boolean)
-      .filter(item => filterMatchesItem(item));
-    if (!roots.length) return 'No topics yet.';
+      .filter(filterMatchesItem);
+    if (!state.roots.length) return 'No topic yet.';
+    if (!roots.length) return 'No matches for the current search.';
     const lines = [];
-    renderSiblingGroup(lines, roots, 0, 'Top-level Topics');
-    return lines.join('\n');
+    roots.forEach(root => {
+      lines.push(flattenInline(itemLabel(root)));
+      pushOutlineSources(lines, root, '');
+      expandOutlineItem(lines, root, '');
+    });
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
   }
 
-  function renderSiblingGroup(lines, items, depth, headingLabel) {
-    const indent = '  '.repeat(depth);
-    if (headingLabel) lines.push(`${indent}${headingLabel}:`);
-    items.forEach((item, idx) => {
-      lines.push(`${indent}- ${idx + 1}. ${flattenInline(itemLabel(item))}`);
+  function outlineNumber(parentNum, index) {
+    return parentNum ? `${parentNum}.${index + 1}` : `${index + 1}`;
+  }
+
+  function outlineIndent(num) {
+    return '  '.repeat(num.split('.').length);
+  }
+
+  function questionOutlineLabel(question) {
+    return flattenInline(question.label || 'Question').replace(/\?+$/, '') + '?';
+  }
+
+  function pushOutlineSources(lines, item, num) {
+    const indent = num ? outlineIndent(num) + '  ' : '  ';
+    (item.sourceList || [])
+      .filter(src => [src.label, src.url, src.note].some(Boolean))
+      .forEach(src => {
+        const parts = [src.label, src.url, src.note].filter(Boolean).map(flattenInline);
+        lines.push(`${indent}[source] ${parts.join(' | ')}`);
+      });
+  }
+
+  // An item's immediate children are its questions.
+  function expandOutlineItem(lines, item, num) {
+    const questions = meaningfulQuestionsForItem(item);
+    questions.forEach((q, i) => {
+      const cn = outlineNumber(num, i);
+      lines.push(`${outlineIndent(cn)}${cn}. ${questionOutlineLabel(q)}`);
     });
     lines.push('');
-    items.forEach((item, idx) => {
-      lines.push(`${indent}${idx + 1}) ${flattenInline(itemLabel(item))}`);
-      if (item.sourceList?.length) {
-        item.sourceList
-          .filter(src => [src.label, src.url, src.note].some(Boolean))
-          .forEach(src => {
-            const parts = [src.label, src.url, src.note].filter(Boolean).map(flattenInline);
-            lines.push(`${indent}  [source] ${parts.join(' | ')}`);
-          });
-      }
-      renderQuestionGroups(lines, item, depth + 1);
-      lines.push('');
+    questions.forEach((q, i) => {
+      const cn = outlineNumber(num, i);
+      lines.push(`${outlineIndent(cn)}${cn}. ${questionOutlineLabel(q)}`);
+      expandOutlineQuestion(lines, q, cn);
     });
   }
 
-  function renderQuestionGroups(lines, item, depth) {
-    const indent = '  '.repeat(depth);
-    const questions = meaningfulQuestionsForItem(item);
-    if (!questions.length) {
-      lines.push(`${indent}(no populated questions)`);
-      return;
-    }
-    questions.forEach((q, qIndex) => {
-      const label = flattenInline(q.label || 'Blank question');
-      lines.push(`${indent}? ${qIndex + 1}. ${label}`);
-      const answers = meaningfulAnswersForQuestion(q);
-      if (!answers.length) {
-        lines.push(`${indent}  (no populated answers)`);
-        return;
-      }
-      answers.forEach((answer, idx) => {
-        lines.push(`${indent}  - ${idx + 1}. ${flattenInline(itemLabel(answer))}`);
-      });
-      lines.push('');
-      answers.forEach((answer, idx) => {
-        lines.push(`${indent}  ${idx + 1}) ${flattenInline(itemLabel(answer))}`);
-        if (answer.sourceList?.length) {
-          answer.sourceList
-            .filter(src => [src.label, src.url, src.note].some(Boolean))
-            .forEach(src => {
-              const parts = [src.label, src.url, src.note].filter(Boolean).map(flattenInline);
-              lines.push(`${indent}    [source] ${parts.join(' | ')}`);
-            });
-        }
-        renderQuestionGroups(lines, answer, depth + 2);
-        lines.push('');
-      });
+  // A question's immediate children are its answers.
+  function expandOutlineQuestion(lines, question, num) {
+    const answers = meaningfulAnswersForQuestion(question);
+    answers.forEach((answer, i) => {
+      const cn = outlineNumber(num, i);
+      lines.push(`${outlineIndent(cn)}${cn}. ${flattenInline(itemLabel(answer))}`);
+      pushOutlineSources(lines, answer, cn);
+    });
+    lines.push('');
+    answers.forEach((answer, i) => {
+      if (!meaningfulQuestionsForItem(answer).length) return;
+      const cn = outlineNumber(num, i);
+      lines.push(`${outlineIndent(cn)}${cn}. ${flattenInline(itemLabel(answer))}`);
+      expandOutlineItem(lines, answer, cn);
     });
   }
 
@@ -1535,19 +1402,8 @@
     persist();
   }
 
-  function toggleTopTopics(forceValue) {
-    state.settings.showTopTopics = typeof forceValue === 'boolean' ? forceValue : !state.settings.showTopTopics;
-    renderTopTopicsState();
-    persist();
-  }
-
   function renderSidebarState() {
     els.workspace.classList.toggle('sidebar-collapsed', !state.settings.sidebarOpen);
-  }
-
-  function renderTopTopicsState() {
-    els.topTopicsPanel.classList.toggle('hidden-panel', !state.settings.showTopTopics);
-    els.toggleTopicsBtn.textContent = state.settings.showTopTopics ? 'Hide Topics' : 'Show Topics';
   }
 
   function renderViewMode() {
@@ -1567,11 +1423,8 @@
     document.body.className = 'theme-' + (state.settings.theme || 'modern');
     els.searchInput.value = state.ui.search || '';
     renderSidebarState();
-    renderTopTopicsState();
     renderViewMode();
-    renderRootLane();
     renderCanvas();
-    renderOutlineTree();
     renderOutlineText();
     updateButtons();
   }
@@ -1624,37 +1477,6 @@
   function getEditableText(el) {
     const raw = (el.textContent || '').trim();
     return raw === (el.dataset.placeholder || '') ? '' : raw;
-  }
-
-  // ── Drag and drop (root lane) ─────────────────────────────────────────────
-
-  function wireDragAndDrop(element, arrayRef, itemId, onDone) {
-    element.addEventListener('dragstart', event => {
-      dragState = { dragType: element.dataset.dragType, itemId, arrayRef };
-      event.dataTransfer.effectAllowed = 'move';
-      element.classList.add('dragging');
-    });
-    element.addEventListener('dragend', () => {
-      dragState = null;
-      element.classList.remove('dragging');
-    });
-    element.addEventListener('dragover', event => {
-      if (!dragState) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = 'move';
-    });
-    element.addEventListener('drop', event => {
-      if (!dragState) return;
-      event.preventDefault();
-      if (element.dataset.dragType !== dragState.dragType) return;
-      const from = arrayRef.indexOf(dragState.itemId);
-      const to = arrayRef.indexOf(itemId);
-      if (from === -1 || to === -1 || from === to) return;
-      pushHistory();
-      arrayRef.splice(to, 0, arrayRef.splice(from, 1)[0]);
-      persist();
-      onDone?.();
-    });
   }
 
   // ── Utilities ─────────────────────────────────────────────────────────────
@@ -1748,10 +1570,37 @@
     download('socrates-app.json', JSON.stringify(payload, null, 2), 'application/json;charset=utf-8');
   }
 
+  // Walk the item/question graph from the roots and fail if any node is
+  // reached twice. A well-formed board is a tree, so a repeated node means a
+  // cycle or shared reference — importing it would send the recursive layout
+  // and meaningfulness walkers into unbounded recursion and crash the render.
+  function assertTree(candidate) {
+    const items = candidate.entities?.items || {};
+    const questions = candidate.entities?.questions || {};
+    const seenItems = new Set();
+    const seenQuestions = new Set();
+    const walkItem = id => {
+      const item = items[id];
+      if (!item) return;
+      if (seenItems.has(id)) throw new Error('Cyclic or shared item reference: ' + id);
+      seenItems.add(id);
+      (item.questionIds || []).forEach(walkQuestion);
+    };
+    const walkQuestion = id => {
+      const q = questions[id];
+      if (!q) return;
+      if (seenQuestions.has(id)) throw new Error('Cyclic or shared question reference: ' + id);
+      seenQuestions.add(id);
+      (q.answerIds || []).forEach(walkItem);
+    };
+    (candidate.roots || []).forEach(walkItem);
+  }
+
   function importJson(raw) {
     try {
       const parsed = JSON.parse(raw);
       if (!parsed || !parsed.roots || !parsed.entities) throw new Error('Invalid JSON structure');
+      assertTree(parsed);
       pushHistory();
       const savedHistory = state.history;
       state = parsed;
@@ -1778,6 +1627,150 @@
         render();
       }
     );
+  }
+
+  // ── Outline text import ───────────────────────────────────────────────────
+
+  // Inverse of generateOutline(). Each line's path-number (e.g. "2.1.1.") fully
+  // encodes its position: depth parity says whether it's a question (odd) or an
+  // answer (even), and the number minus its last segment is its parent. Repeated
+  // lines (a node shown in its parent's list and again as a section header) are
+  // deduped by number. Throws if a line doesn't fit the format.
+  function buildStateFromOutline(text) {
+    const lines = String(text || '').replace(/\r/g, '').split('\n');
+    const numberRe = /^(\d+(?:\.\d+)*)\.\s+(.*)$/;
+    const sourceRe = /^\[source\]\s*(.*)$/i;
+
+    let title = null;
+    let sawTitle = false;
+    let lastNum = null; // null => title context
+    const titleSources = [];
+    const nodes = new Map(); // num -> { label, kind, sources: [] }
+
+    lines.forEach(raw => {
+      const line = raw.trim();
+      if (!line) return;
+
+      const sm = line.match(sourceRe);
+      if (sm) {
+        if (!sawTitle) throw new Error('Found a [source] before any topic title.');
+        if (lastNum === null) titleSources.push(sm[1].trim());
+        else {
+          const node = nodes.get(lastNum);
+          if (node && !node.sources.includes(sm[1].trim())) node.sources.push(sm[1].trim());
+        }
+        return;
+      }
+
+      const nm = line.match(numberRe);
+      if (nm) {
+        if (!sawTitle) throw new Error('Found a numbered line before the topic title.');
+        const num = nm[1];
+        lastNum = num;
+        if (!nodes.has(num)) {
+          nodes.set(num, {
+            label: nm[2].trim(),
+            kind: num.split('.').length % 2 === 1 ? 'question' : 'answer',
+            sources: [],
+          });
+        }
+        return;
+      }
+
+      if (!sawTitle) { title = line; sawTitle = true; lastNum = null; return; }
+      throw new Error(`Line doesn't match the outline format: "${line}"`);
+    });
+
+    if (!sawTitle) throw new Error('No topic title found.');
+
+    const s = createInitialState();
+    const topicId = s.roots[0];
+    const topic = s.entities.items[topicId];
+    topic.text = title;
+    topic.nodeMode = 'expanded';
+    topic.sourceList = titleSources.map(parseSourceString);
+
+    const itemIdByNum = new Map([['', topicId]]);
+    const questionIdByNum = new Map();
+
+    const depthOf = n => n.split('.').length;
+    const cmpNum = (a, b) => {
+      const pa = a.split('.').map(Number), pb = b.split('.').map(Number);
+      for (let i = 0; i < Math.min(pa.length, pb.length); i++) {
+        if (pa[i] !== pb[i]) return pa[i] - pb[i];
+      }
+      return pa.length - pb.length;
+    };
+    // Shallowest first so every parent exists before its children; numeric order
+    // within a depth preserves sibling ordering.
+    const orderedNums = Array.from(nodes.keys()).sort((a, b) => depthOf(a) - depthOf(b) || cmpNum(a, b));
+
+    orderedNums.forEach(num => {
+      const node = nodes.get(num);
+      const parentNum = num.split('.').slice(0, -1).join('.');
+      if (node.kind === 'question') {
+        const parentItemId = itemIdByNum.get(parentNum);
+        if (!parentItemId) throw new Error(`Question "${num}" has no parent answer "${parentNum}".`);
+        const label = node.label.replace(/\?+$/, '').trim();
+        const q = createQuestionInternal(s, parentItemId, label);
+        questionIdByNum.set(num, q.id);
+      } else {
+        const parentQId = questionIdByNum.get(parentNum);
+        if (!parentQId) throw new Error(`Answer "${num}" has no parent question "${parentNum}".`);
+        const item = createItemInternal(s, { kind: 'answer', text: node.label, parentQuestionId: parentQId });
+        item.sourceList = node.sources.map(parseSourceString);
+        itemIdByNum.set(num, item.id);
+      }
+    });
+
+    s.ui.selectedItemId = topicId;
+    return s;
+  }
+
+  function parseSourceString(str) {
+    const parts = String(str || '').split('|').map(p => p.trim()).filter(Boolean);
+    const src = { id: uid('src'), label: '', url: '', note: '' };
+    const rest = [];
+    parts.forEach(p => {
+      if (/^https?:\/\//i.test(p) && !src.url) src.url = p;
+      else rest.push(p);
+    });
+    if (rest.length) src.label = rest.shift();
+    if (rest.length) src.note = rest.join(' | ');
+    return src;
+  }
+
+  function applyImportedState(next) {
+    pushHistory();
+    const savedHistory = state.history;
+    state = next;
+    state.history = savedHistory;
+    if (!state.history.past) state.history.past = [];
+    if (!state.history.future) state.history.future = [];
+    normalizeState();
+    persist();
+    render();
+  }
+
+  // Modal path: explicit errors are worth an alert.
+  function importOutlineText(raw) {
+    try {
+      applyImportedState(buildStateFromOutline(raw));
+      closeModal();
+      flash('Outline imported.');
+    } catch (err) {
+      alert('Import failed: ' + err.message);
+    }
+  }
+
+  // Paste-into-the-outline path: non-blocking feedback so a stray paste is quiet.
+  function importOutlineTextFromPaste(raw) {
+    try {
+      applyImportedState(buildStateFromOutline(raw));
+      flash('Outline imported from paste.');
+    } catch (err) {
+      flash("That paste didn't match the outline format.");
+    }
   }
 
   // ── Examples ──────────────────────────────────────────────────────────────
@@ -1823,8 +1816,8 @@
     addActionItem(dropdown, 'Arrange Layout', arrangeLayout);
     addActionItem(dropdown, 'Reset Zoom', resetZoom);
     addActionSep(dropdown);
-    addActionItem(dropdown, 'Copy Outline', () => copyToClipboard(generateBreadthThenDrillOutline(), 'Outline copied.'));
-    addActionItem(dropdown, 'Download .txt', () => download('socrates-app-outline.txt', generateBreadthThenDrillOutline()));
+    addActionItem(dropdown, 'Copy Outline', () => copyToClipboard(generateOutline(), 'Outline copied.'));
+    addActionItem(dropdown, 'Download .txt', () => download('socrates-app-outline.txt', generateOutline()));
     addActionSep(dropdown);
     addActionItem(dropdown, 'Export JSON', exportJson);
     addActionItem(dropdown, 'Import JSON', () => openModal({
@@ -1832,6 +1825,14 @@
       subtitle: 'Paste a previously exported JSON payload to resume a session.',
       actions: [
         { label: 'Import', primary: true, onClick: importJson },
+        { label: 'Cancel', onClick: closeModal },
+      ],
+    }));
+    addActionItem(dropdown, 'Import Outline Text', () => openModal({
+      title: 'Import Outline Text',
+      subtitle: 'Paste outline text (the same format as Copy / Download .txt) to rebuild the tree.',
+      actions: [
+        { label: 'Import', primary: true, onClick: importOutlineText },
         { label: 'Cancel', onClick: closeModal },
       ],
     }));
@@ -1892,8 +1893,6 @@
   // ── Event wiring ──────────────────────────────────────────────────────────
 
   function setupEvents() {
-    els.newRootBtn.addEventListener('click', addRoot);
-    els.toggleTopicsBtn.addEventListener('click', () => toggleTopTopics());
     els.toggleSidebarBtn.addEventListener('click', () => toggleSidebar());
     els.collapseSidebarInnerBtn.addEventListener('click', () => toggleSidebar(false));
     els.boardViewBtn.addEventListener('click', () => setMainView('board'));
@@ -1901,8 +1900,8 @@
     els.undoBtn.addEventListener('click', undo);
     els.redoBtn.addEventListener('click', redo);
     els.resetZoomBtn?.addEventListener('click', resetZoom);
-    els.zoomInBtn?.addEventListener('click', () => { zoomAtCenter(1.25); renderCanvas(); });
-    els.zoomOutBtn?.addEventListener('click', () => { zoomAtCenter(0.8); renderCanvas(); });
+    els.zoomInBtn?.addEventListener('click', () => zoomStep(1.25));
+    els.zoomOutBtn?.addEventListener('click', () => zoomStep(0.8));
     els.zoomFitBtn?.addEventListener('click', fitView);
     els.actionsBtn.addEventListener('click', e => { e.stopPropagation(); toggleActionsDropdown(); });
     document.addEventListener('click', e => {
@@ -1913,12 +1912,17 @@
     });
     els.searchInput.addEventListener('input', e => {
       state.ui.search = e.target.value;
-      persist();
-      renderRootLane();
-      renderOutlineTree();
+      schedulePersist();
       renderOutlineText();
     });
-    els.downloadTextBtn.addEventListener('click', () => download('socrates-app-outline.txt', generateBreadthThenDrillOutline()));
+    els.copyOutlineBtn.addEventListener('click', () => copyToClipboard(generateOutline(), 'Outline copied.'));
+    els.downloadTextBtn.addEventListener('click', () => download('socrates-app-outline.txt', generateOutline()));
+    els.outlineText.addEventListener('paste', e => {
+      const pasted = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+      if (!pasted.trim()) return;
+      e.preventDefault();
+      importOutlineTextFromPaste(pasted);
+    });
     els.closeModalBtn.addEventListener('click', closeModal);
     els.modalBackdrop.addEventListener('click', e => {
       if (e.target === els.modalBackdrop) closeModal();
@@ -1926,11 +1930,15 @@
 
     document.addEventListener('keydown', e => {
       const isInput = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
-        e.preventDefault(); undo(); return;
-      }
-      if (((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'z') || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y')) {
-        e.preventDefault(); redo(); return;
+      // Only take over undo/redo when the caret isn't in a text field, so
+      // native per-character undo keeps working while editing content.
+      if (!isInput) {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+          e.preventDefault(); undo(); return;
+        }
+        if (((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'z') || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y')) {
+          e.preventDefault(); redo(); return;
+        }
       }
       if (e.key === 'Escape') {
         if (els.modalBackdrop.classList.contains('open')) { closeModal(); return; }
@@ -1944,16 +1952,20 @@
         return;
       }
       if (isInput) return;
-      if (e.key.toLowerCase() === 'n') { e.preventDefault(); addRoot(); }
       if (e.key.toLowerCase() === 'q') {
         e.preventDefault();
         const item = getSelectedItem();
-        if (item) addCustomQuestion(item.id, '');
+        if (item) addCustomQuestion(item.id);
       }
       if (e.key.toLowerCase() === 'a') {
         e.preventDefault();
         if (state.ui.activeQuestionId) addAnswerToQuestion(state.ui.activeQuestionId);
       }
+      // Zoom hotkeys (plain keys, board-focused; don't fight browser zoom).
+      if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomStep(1.25); }
+      else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoomStep(0.8); }
+      else if (e.key === '0') { e.preventDefault(); resetZoom(); }
+      else if (e.key.toLowerCase() === 'f') { e.preventDefault(); fitView(); }
     });
 
     initPanEvents();

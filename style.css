@@ -279,16 +279,6 @@
       flex-direction: column;
     }
 
-    .topics-strip {
-      flex: 0 0 auto;
-      border-radius: 0;
-      border-left: none;
-      border-right: none;
-      border-top: none;
-      overflow: auto;
-      max-height: 220px;
-    }
-
     #outlineView {
       flex: 1;
       overflow: auto;
@@ -316,6 +306,11 @@
       transform-origin: 0 0;
       will-change: transform;
     }
+
+    /* Applied only for stepped (button/hotkey) zoom so it glides; wheel/drag
+       stay instant. */
+    .canvas-world.zoom-animating,
+    .connection-svg.zoom-animating { transition: transform 0.16s ease; }
 
     .connection-svg {
       position: absolute;
@@ -360,6 +355,14 @@
 
     .zoom-btn:hover { opacity: 0.75; }
 
+    .zoom-btn.zoom-readout {
+      width: auto;
+      min-width: 34px;
+      padding: 0 7px;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
     /* ── Canvas legend ── */
 
     .canvas-legend {
@@ -401,8 +404,6 @@
       box-shadow: var(--shadow);
       overflow: hidden;
     }
-
-    .panel.hidden-panel { display: none; }
 
     .panel-header {
       padding: 14px 16px;
@@ -764,54 +765,10 @@
     .connection-path.custom { stroke: var(--custom); }
     .connection-path.blank { stroke: var(--blank); }
 
-    /* ── Topic strip root chips ── */
+    /* ── Drag state ── */
 
-    .root-lane {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      align-items: stretch;
-    }
-
-    .root-chip {
-      min-width: 220px;
-      max-width: 280px;
-      padding: 14px;
-      border-radius: 18px;
-      border: 1px solid var(--border);
-      background: var(--surface-2);
-      box-shadow: 0 8px 20px rgba(35, 49, 89, 0.08);
-      display: grid;
-      gap: 8px;
-      cursor: grab;
-      position: relative;
-    }
-
-    .root-chip.active {
-      outline: 3px solid rgba(79,124,255,0.15);
-      border-color: rgba(79,124,255,0.45);
-    }
-
-    .root-chip.dragging { opacity: 0.45; }
     .node.dragging { opacity: 0.45; }
     .answer-bullet.dragging { opacity: 0.45; background: var(--surface-hover, rgba(0,0,0,0.04)); border-radius: 6px; }
-    .root-chip small, .muted { color: var(--muted); }
-
-    .root-chip-label {
-      outline: none;
-      border-radius: 8px;
-      padding: 2px 4px;
-      min-width: 60px;
-      cursor: text;
-      font-weight: 700;
-    }
-
-    .root-chip-label:focus {
-      background: rgba(255,255,255,0.6);
-      box-shadow: 0 0 0 2px rgba(79,124,255,0.2);
-    }
-
-    .root-chip-label[data-empty="true"] { color: #99a3ba; }
 
     /* ── Chips & pills ── */
 
@@ -850,40 +807,6 @@
       border: 1px solid var(--border);
       background: rgba(255,255,255,0.64);
       font-size: 0.78rem;
-    }
-
-    /* ── Outline tree ── */
-
-    .outline-tree { display: grid; gap: 8px; }
-
-    .outline-node {
-      display: grid;
-      gap: 8px;
-      border-left: 2px solid rgba(79,124,255,0.16);
-      padding-left: 12px;
-      margin-left: 2px;
-    }
-
-    .outline-item-row, .outline-question-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-
-    .outline-select {
-      flex: 1;
-      min-width: 0;
-      text-align: left;
-      border-radius: 14px;
-      border: 1px solid transparent;
-      padding: 8px 10px;
-      background: rgba(255,255,255,0.22);
-    }
-
-    .outline-select.active {
-      background: rgba(79,124,255,0.12);
-      border-color: rgba(79,124,255,0.22);
     }
 
     pre.export-text {
@@ -1105,5 +1028,4 @@
       }
       .workspace.sidebar-collapsed .sidebar { transform: translateX(-100%); opacity: 1; pointer-events: none; }
       .workspace:not(.sidebar-collapsed) .sidebar { transform: translateX(0); }
-      .root-chip { min-width: 180px; }
     }

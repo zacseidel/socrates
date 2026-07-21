@@ -20,8 +20,6 @@
     </div>
 
     <div class="toolbar-group" role="toolbar" aria-label="Primary actions">
-      <button id="newRootBtn" class="primary" title="New top-level topic (N)">+ New Topic</button>
-      <button id="toggleTopicsBtn" class="soft" title="Hide or show the Top-Level Topics strip">Hide Topics</button>
       <button id="toggleSidebarBtn" class="icon-btn" title="Toggle outline sidebar" aria-label="Toggle outline sidebar">☰</button>
     </div>
 
@@ -52,61 +50,40 @@
       <div class="sidebar-header">
         <div>
           <div class="panel-title">Outline Navigator</div>
-          <div class="panel-subtitle">Only populated branches appear here, so the tree stays quiet until you use a question.</div>
+          <div class="panel-subtitle">A live, indented outline of your topic — every populated question and answer, in reading order.</div>
         </div>
         <button id="collapseSidebarInnerBtn" class="icon-btn" title="Hide sidebar" aria-label="Hide sidebar">×</button>
       </div>
       <div class="sidebar-body">
-        <section class="panel" aria-label="Tree view">
+        <section class="panel" aria-label="Outline export">
           <div class="panel-header">
-            <div class="panel-title">Tree</div>
-            <span class="pill" id="selectionPill" aria-live="polite">No selection</span>
+            <div>
+              <div class="panel-title">Outline</div>
+              <span class="pill" id="selectionPill" aria-live="polite">No selection</span>
+            </div>
+            <div class="mini-toolbar">
+              <button id="copyOutlineBtn" class="soft" title="Copy the outline text to the clipboard">Copy</button>
+              <button id="downloadTextBtn" class="soft">Download .txt</button>
+            </div>
           </div>
           <div class="panel-body">
-            <div id="outlineTree" class="outline-tree" role="tree"></div>
-          </div>
-        </section>
-
-        <section class="panel" aria-label="Export preview">
-          <div class="panel-header">
-            <div class="panel-title">Live Outline Export</div>
-            <button id="downloadTextBtn" class="soft">Download .txt</button>
-          </div>
-          <div class="panel-body">
-            <pre id="outlineText" class="export-text" aria-live="polite"></pre>
+            <pre id="outlineText" class="export-text" aria-live="polite" tabindex="0" title="Paste outline text here (⌘/Ctrl+V) to rebuild the tree"></pre>
           </div>
         </section>
       </div>
     </aside>
 
     <main class="main" role="main">
-      <section id="topTopicsPanel" class="panel topics-strip" aria-label="Top-level topics">
-        <div class="panel-header">
-          <div>
-            <div class="panel-title">Top-Level Topics</div>
-            <div class="panel-subtitle">Drag to reorder. Hide this strip when you want a one-topic-at-a-time workspace.</div>
-          </div>
-          <div class="status">
-            <span class="pill">Drag to reorder</span>
-            <span class="pill">Auto-saved locally</span>
-            <span class="pill">Import/export ready</span>
-          </div>
-        </div>
-        <div class="panel-body">
-          <div id="rootLane" class="root-lane" role="list" aria-label="Top-level topics"></div>
-        </div>
-      </section>
-
       <div id="boardView" class="canvas-viewport" role="region" aria-label="Strategy board">
         <svg id="connectionLayer" class="connection-svg" aria-hidden="true"></svg>
         <div id="canvasWorld" class="canvas-world"></div>
 
         <!-- Zoom controls -->
         <div id="zoomBar" class="zoom-bar" aria-label="Zoom controls">
-          <button id="zoomInBtn"  class="zoom-btn" title="Zoom in">＋</button>
-          <button id="zoomOutBtn" class="zoom-btn" title="Zoom out">－</button>
-          <button id="zoomFitBtn" class="zoom-btn" title="Fit all nodes in view">⊡</button>
-          <button id="resetZoomBtn" class="zoom-btn" title="Reset zoom to 100%">1×</button>
+          <button id="zoomInBtn"  class="zoom-btn" title="Zoom in (+)">＋</button>
+          <button id="zoomOutBtn" class="zoom-btn" title="Zoom out (−)">－</button>
+          <button id="zoomFitBtn" class="zoom-btn" title="Fit all nodes in view (F)">⊡</button>
+          <button id="resetZoomBtn" class="zoom-btn zoom-readout" title="Current zoom — click to reset to 100% (0)">100%</button>
         </div>
 
         <!-- Canvas legend -->
