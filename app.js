@@ -1,5 +1,15 @@
+import {
+  findTreeMatches,
+  getChildTargets,
+  getFocusContext,
+  moveChildInState,
+  targetExists,
+  targetLabel,
+} from './tree-model.js';
+
 (function() {
-  const STORAGE_KEY = 'strategyfractal-state-v2';
+  const STORAGE_KEY = 'strategyfractal-state-v3';
+  const LEGACY_STORAGE_KEYS = ['strategyfractal-state-v2', 'strategyfractal-state-v1'];
   const DEFAULT_QUESTIONS = ['Why', 'What', 'How', 'Who'];
   const THEMES = ['modern', 'sticky', 'playful', 'minimal'];
   const ZOOM_MIN = 0.12;
@@ -7,25 +17,30 @@
   const HALF_SPREAD = Math.PI * 5 / 12; // 75° fan, ~1 o'clock to ~5 o'clock
   const ARC_R_MIN = 120;
   const ROW_GAP = 16;
-  const NODE_W_TOPIC = 260;
-  const NODE_W_QUESTION = 280;
+  const NODE_W_TOPIC = 300;
+  const NODE_W_QUESTION = 340;
 
   const els = {
     workspace: document.getElementById('workspace'),
     outlineText: document.getElementById('outlineText'),
-    outlineViewText: document.getElementById('outlineViewText'),
     selectionPill: document.getElementById('selectionPill'),
     boardView: document.getElementById('boardView'),
-    outlineView: document.getElementById('outlineView'),
+    focusView: document.getElementById('focusView'),
+    focusBreadcrumbs: document.getElementById('focusBreadcrumbs'),
+    focusContext: document.getElementById('focusContext'),
+    focusCurrent: document.getElementById('focusCurrent'),
+    focusChildren: document.getElementById('focusChildren'),
     canvasWorld: document.getElementById('canvasWorld'),
     connectionLayer: document.getElementById('connectionLayer'),
     toggleSidebarBtn: document.getElementById('toggleSidebarBtn'),
     collapseSidebarInnerBtn: document.getElementById('collapseSidebarInnerBtn'),
+    sidebarBackdrop: document.getElementById('sidebarBackdrop'),
     boardViewBtn: document.getElementById('boardViewBtn'),
-    outlineViewBtn: document.getElementById('outlineViewBtn'),
+    focusViewBtn: document.getElementById('focusViewBtn'),
     undoBtn: document.getElementById('undoBtn'),
     redoBtn: document.getElementById('redoBtn'),
     searchInput: document.getElementById('searchInput'),
+    searchResults: document.getElementById('searchResults'),
     copyOutlineBtn: document.getElementById('copyOutlineBtn'),
     downloadTextBtn: document.getElementById('downloadTextBtn'),
     modalBackdrop: document.getElementById('modalBackdrop'),
@@ -40,8 +55,19 @@
     zoomFitBtn: document.getElementById('zoomFitBtn'),
     actionsBtn: document.getElementById('actionsBtn'),
     actionsDropdown: document.getElementById('actionsDropdown'),
+    orderBackdrop: document.getElementById('orderBackdrop'),
+    orderSheet: document.getElementById('orderSheet'),
+    orderSheetTitle: document.getElementById('orderSheetTitle'),
+    orderSheetSubtitle: document.getElementById('orderSheetSubtitle'),
+    orderList: document.getElementById('orderList'),
+    closeOrderSheetBtn: document.getElementById('closeOrderSheetBtn'),
+    openSelectedInFocusBtn: document.getElementById('openSelectedInFocusBtn'),
+    saveIndicator: document.getElementById('saveIndicator'),
+    appToast: document.getElementById('appToast'),
   };
 
+  const phoneMedia = window.matchMedia('(max-width: 767px)');
+  let loadedFromLegacyStorage = false;
   let state = loadState() || createInitialState();
   let dragState = null;
   let toastTimer = null;
@@ -50,15 +76,21 @@
   let isPanning = false;
   let panStart = { x: 0, y: 0 };
   let nodeDragState = null; // free-position canvas drag for question nodes
+  let orderSheetParent = null;
+  let lastDialogTrigger = null;
+  let lastSidebarTrigger = null;
+  let suppressNextHistoryFocus = false;
+  const measuredNodeHeights = new Map();
+  let measurementRenderPending = false;
 
   // ── Initial state ─────────────────────────────────────────────────────────
 
   function createInitialState() {
     const s = {
-      version: 2,
+      version: 3,
       settings: {
         theme: 'modern',
-        mainView: 'board',
+        mainView: phoneMedia.matches ? 'focus' : 'board',
         sidebarOpen: false,
         showTopTopics: true,
       },
@@ -67,6 +99,8 @@
         activeQuestionId: null,
         search: '',
         canvas: { panX: 60, panY: 60, scale: 1.0 },
+        phoneCanvas: { panX: 24, panY: 24, scale: 0.8 },
+        focusTarget: null,
       },
       roots: [],
       entities: {
@@ -86,6 +120,7 @@
     const first = createItemInternal(s, { kind: 'topic', text: '' });
     s.roots.push(first.id);
     s.ui.selectedItemId = first.id;
+    s.ui.focusTarget = { kind: 'item', id: first.id };
     return s;
   }
 
@@ -164,9 +199,12 @@
 
   function normalizeState() {
     if (!state.settings) state.settings = { theme: 'modern', mainView: 'board', sidebarOpen: true, showTopTopics: true };
+    if (state.settings.mainView === 'outline') state.settings.mainView = 'focus';
+    if (!['board', 'focus'].includes(state.settings.mainView)) state.settings.mainView = 'board';
     if (typeof state.settings.showTopTopics !== 'boolean') state.settings.showTopTopics = true;
     if (!state.ui) state.ui = { selectedItemId: null, activeQuestionId: null, search: '', canvas: { panX: 60, panY: 60, scale: 1.0 } };
     if (!state.ui.canvas) state.ui.canvas = { panX: 60, panY: 60, scale: 1.0 };
+    if (!state.ui.phoneCanvas) state.ui.phoneCanvas = { panX: 24, panY: 24, scale: 0.8 };
     if (!state.history) state.history = { past: [], future: [] };
     if (!state.entities) state.entities = { items: {}, questions: {} };
     if (!Array.isArray(state.roots)) state.roots = [];
@@ -180,6 +218,9 @@
     Object.values(state.entities.items).forEach(item => {
       if (!Array.isArray(item.questionIds)) item.questionIds = [];
       if (!Array.isArray(item.sourceList)) item.sourceList = [];
+      item.sourceList.forEach(source => {
+        if (!source.id) source.id = uid('src');
+      });
       if (!item.nodeMode) item.nodeMode = 'collapsed';
     });
     Object.values(state.entities.questions).forEach(q => {
@@ -189,6 +230,14 @@
     if (!state.entities.items[state.ui.selectedItemId]) {
       state.ui.selectedItemId = state.roots[0] || null;
     }
+    if (!targetExists(state, state.ui.focusTarget)) {
+      state.ui.focusTarget = state.ui.selectedItemId
+        ? { kind: 'item', id: state.ui.selectedItemId }
+        : state.roots[0]
+          ? { kind: 'item', id: state.roots[0] }
+          : null;
+    }
+    state.version = 3;
   }
 
   function undo() {
@@ -214,8 +263,10 @@
     delete payload.history;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      if (els.saveIndicator) els.saveIndicator.textContent = 'Saved locally';
     } catch (err) {
       console.warn('Failed to save state:', err);
+      if (els.selectionPill) flash('Local save failed. Export a backup.');
     }
   }
 
@@ -224,14 +275,17 @@
   // so we don't serialize the whole board on every keystroke.
   function schedulePersist(delay = 400) {
     clearTimeout(persistTimer);
+    if (els.saveIndicator) els.saveIndicator.textContent = 'Saving…';
     persistTimer = setTimeout(persist, delay);
   }
 
   function loadState() {
     try {
-      const rawV2 = localStorage.getItem(STORAGE_KEY);
-      const rawV1 = localStorage.getItem('strategyfractal-state-v1');
-      const raw = rawV2 || rawV1;
+      let raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) {
+        raw = LEGACY_STORAGE_KEYS.map(key => localStorage.getItem(key)).find(Boolean);
+        loadedFromLegacyStorage = Boolean(raw);
+      }
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== 'object' || !parsed.entities || !parsed.roots) return null;
@@ -282,6 +336,25 @@
     updateButtons();
   }
 
+  function setFocusTarget(target, { switchView = false } = {}) {
+    if (!targetExists(state, target)) return;
+    state.ui.focusTarget = { kind: target.kind, id: target.id };
+    if (target.kind === 'item') {
+      state.ui.selectedItemId = target.id;
+      state.ui.activeQuestionId = state.entities.items[target.id]?.parentQuestionId || null;
+    } else {
+      const question = state.entities.questions[target.id];
+      state.ui.activeQuestionId = target.id;
+      state.ui.selectedItemId = question?.parentItemId || state.ui.selectedItemId;
+    }
+    if (switchView) state.settings.mainView = 'focus';
+    persist();
+    render();
+    requestAnimationFrame(() => {
+      focusWithoutHistory(els.focusCurrent?.querySelector('textarea, input'), { preventScroll: true });
+    });
+  }
+
   function setExpandedNode(itemId, mode) {
     const item = state.entities.items[itemId];
     if (!item) return;
@@ -295,10 +368,13 @@
   function filterMatchesItem(item) {
     const query = (state.ui.search || '').trim().toLowerCase();
     if (!query) return true;
-    const inText = (item.text || '').toLowerCase().includes(query);
-    const inSources = item.sourceList.some(src => [src.label, src.url, src.note].join(' ').toLowerCase().includes(query));
-    const inQuestions = item.questionIds.some(qId => (state.entities.questions[qId]?.label || '').toLowerCase().includes(query));
-    return inText || inSources || inQuestions;
+    return findTreeMatches(state, query).visible.has(`item:${item.id}`);
+  }
+
+  function searchAllows(kind, id) {
+    const query = (state.ui.search || '').trim();
+    if (!query) return true;
+    return findTreeMatches(state, query).visible.has(`${kind}:${id}`);
   }
 
   function hasDirectItemContent(item) {
@@ -319,21 +395,24 @@
   }
 
   function meaningfulQuestionsForItem(item) {
+    const searching = Boolean((state.ui.search || '').trim());
     return item.questionIds
       .map(id => state.entities.questions[id])
-      .filter(q => q && isQuestionMeaningful(q));
+      .filter(q => q && (searching ? searchAllows('question', q.id) : isQuestionMeaningful(q)));
   }
 
   function meaningfulAnswersForQuestion(question) {
+    const searching = Boolean((state.ui.search || '').trim());
     return question.answerIds
       .map(id => state.entities.items[id])
-      .filter(answer => answer && isItemMeaningful(answer));
+      .filter(answer => answer && (searching ? searchAllows('item', answer.id) : isItemMeaningful(answer)));
   }
 
   // ── Layout engine ─────────────────────────────────────────────────────────
 
   function estimateItemHeight(item) {
     if (!item) return 44;
+    if (measuredNodeHeights.has(item.id)) return measuredNodeHeights.get(item.id);
     if (item.nodeMode === 'collapsed') return 40;
     const srcH = item.sourceList.length * 64;
     return 90 + srcH;
@@ -341,6 +420,7 @@
 
   function estimateQuestionHeight(question) {
     if (!question) return 44;
+    if (measuredNodeHeights.has(question.id)) return measuredNodeHeights.get(question.id);
     const answerCount = Math.max(1, question.answerIds.length);
     return 56 + answerCount * 58;
   }
@@ -354,6 +434,18 @@
   }
 
   const ANSWER_H = 58; // matches estimateQuestionHeight per-answer increment
+
+  function topicNodeWidth() {
+    return phoneMedia.matches
+      ? Math.max(240, Math.min(NODE_W_TOPIC, els.boardView.clientWidth - 32))
+      : NODE_W_TOPIC;
+  }
+
+  function questionNodeWidth() {
+    return phoneMedia.matches
+      ? Math.max(260, Math.min(NODE_W_QUESTION, els.boardView.clientWidth - 24))
+      : NODE_W_QUESTION;
+  }
 
   // Total vertical space needed by all sub-questions hanging off an item.
   function computeFullSubtreeH(itemId) {
@@ -404,7 +496,7 @@
       const N = item.questionIds.filter(qId => state.entities.questions[qId]).length;
 
       if (N === 0) {
-        layout.set(rootId, { x: 60, y: arcBottom, w: NODE_W_TOPIC, h });
+        layout.set(rootId, { x: 60, y: arcBottom, w: topicNodeWidth(), h });
         arcBottom += h + ROW_GAP * 3;
         return;
       }
@@ -418,7 +510,7 @@
       const arcTopExt = R * Math.sin(HALF_SPREAD) + (slotHeights[0] || 0) / 2;
       const cy = arcBottom + ROW_GAP * 3 + arcTopExt;
       const y = cy - h / 2;
-      layout.set(rootId, { x: 60, y, w: NODE_W_TOPIC, h });
+      layout.set(rootId, { x: 60, y, w: topicNodeWidth(), h });
       layoutSubtree(rootId, 0, y, layout);
       const arcBotExt = R * Math.sin(HALF_SPREAD) + (slotHeights[N - 1] || 0) / 2;
       arcBottom = cy + arcBotExt;
@@ -458,7 +550,7 @@
       const qX = (q.manualX !== undefined) ? q.manualX : arcLeft;
       const qY = (q.manualY !== undefined) ? q.manualY : arcTop;
 
-      layout.set(questionId, { x: qX, y: qY, w: NODE_W_QUESTION, h: qH });
+      layout.set(questionId, { x: qX, y: qY, w: questionNodeWidth(), h: qH });
 
       // Place each answer's layout slot so its center matches the bullet's
       // visual position inside the question card. The card header occupies
@@ -471,7 +563,7 @@
         const ansSubH = computeFullSubtreeH(answerId);
         const ansSlotH = Math.max(ansSubH, ANSWER_H);
         const bulletCenterY = qY + 56 + ai * ANSWER_H + ANSWER_H / 2;
-        layout.set(answerId, { x: qX, y: bulletCenterY - ansSlotH / 2, w: NODE_W_QUESTION, h: ansSlotH, inline: true });
+        layout.set(answerId, { x: qX, y: bulletCenterY - ansSlotH / 2, w: questionNodeWidth(), h: ansSlotH, inline: true });
         if (ansSubH > 0) layoutSubtree(answerId, depth + 1, 0, layout);
       });
     });
@@ -494,6 +586,8 @@
   }
 
   function syncCanvasNodes(layout) {
+    const query = (state.ui.search || '').trim();
+    const searchIndex = query ? findTreeMatches(state, query) : null;
     // Remove orphaned nodes
     Array.from(els.canvasWorld.querySelectorAll('[data-node-id]')).forEach(el => {
       const id = el.dataset.nodeId;
@@ -524,6 +618,13 @@
       nodeEl.style.left = pos.x + 'px';
       nodeEl.style.top = pos.y + 'px';
       nodeEl.style.width = pos.w + 'px';
+      if (query) {
+        const kind = isItem ? 'item' : 'question';
+        nodeEl.classList.toggle('search-match', searchIndex.matches.has(`${kind}:${id}`));
+        nodeEl.classList.toggle('search-muted', !searchIndex.visible.has(`${kind}:${id}`));
+      } else {
+        nodeEl.classList.remove('search-match', 'search-muted');
+      }
 
       if (isItem) {
         renderItemNode(nodeEl, state.entities.items[id]);
@@ -532,9 +633,37 @@
         const q = state.entities.questions[id];
         if (q) {
           const handle = nodeEl.querySelector('.q-drag-handle');
-          if (handle) {
-            handle.addEventListener('mousedown', e => startNodeDrag(e, q.id, nodeEl, pos));
+          if (handle && !phoneMedia.matches) {
+            handle.addEventListener('pointerdown', e => startNodeDrag(e, q.id, nodeEl, pos));
           }
+        }
+      }
+
+      if (phoneMedia.matches) {
+        const target = isItem ? { kind: 'item', id } : { kind: 'question', id };
+        nodeEl.tabIndex = 0;
+        nodeEl.setAttribute('role', 'button');
+        nodeEl.setAttribute('aria-label', `${targetLabel(state, target)}. Select to open in Focus.`);
+        nodeEl.addEventListener('keydown', event => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          nodeEl.click();
+        });
+      } else {
+        nodeEl.removeAttribute('tabindex');
+        nodeEl.removeAttribute('role');
+        nodeEl.removeAttribute('aria-label');
+      }
+
+      const renderedHeight = nodeEl.firstElementChild?.offsetHeight || nodeEl.offsetHeight;
+      if (canvasState().scale >= 0.6 && renderedHeight > 0 && Math.abs((measuredNodeHeights.get(id) || 0) - renderedHeight) > 1) {
+        measuredNodeHeights.set(id, renderedHeight);
+        if (!measurementRenderPending) {
+          measurementRenderPending = true;
+          requestAnimationFrame(() => {
+            measurementRenderPending = false;
+            renderCanvas();
+          });
         }
       }
     });
@@ -546,11 +675,17 @@
     const dotColor = '#94a3b8';
 
     const chipActive = isSelected ? 'is-active' : '';
+    const rootIndex = state.roots.indexOf(item.id);
+    const orderBadge = rootIndex >= 0 && state.roots.length > 1
+      ? `<span class="node-order-badge" aria-label="Position ${rootIndex + 1}">${rootIndex + 1}</span>`
+      : '';
+    const boardReadOnly = phoneMedia.matches;
 
     if (!isExpanded) {
       nodeEl.innerHTML = `
         <div class="node-dot" style="background:${dotColor};"></div>
         <div class="node-topic-chip ${chipActive}" data-action="expand">
+          ${orderBadge}
           <span>${escapeHtml(itemLabel(item))}</span>
         </div>
       `;
@@ -567,13 +702,14 @@
         <div class="node-dot" style="background:${dotColor};"></div>
         <div class="node-topic-card ${chipActive}">
           <div class="node-card-header">
+            ${orderBadge}
             <div class="node-chrome" style="display:flex;gap:6px;align-items:center;">
               <button type="button" class="soft" style="padding:5px 10px;font-size:0.78rem;" data-action="collapse">Collapse</button>
               <button type="button" class="soft" style="padding:5px 10px;font-size:0.78rem;" data-action="delete-item">Delete</button>
             </div>
           </div>
           <div class="node-card-body">
-            <div class="node-text-area" contenteditable="true" spellcheck="true" data-item-text="${item.id}"></div>
+            <div class="node-text-area" contenteditable="${boardReadOnly ? 'false' : 'true'}" spellcheck="true" data-item-text="${item.id}"></div>
             <div class="node-question-buttons">
               ${spawnBtns}
               <button type="button" class="spawn-btn custom" data-spawn-custom="1">+ Custom</button>
@@ -581,6 +717,7 @@
             <div class="inline-sources" data-source-mount="${item.id}">${sourceHtml}</div>
             <div class="node-chrome" style="display:flex;gap:6px;flex-wrap:wrap;">
               <button type="button" class="soft" style="padding:5px 10px;font-size:0.78rem;" data-action="add-source">+ Source</button>
+              ${item.questionIds.length > 1 ? '<button type="button" class="soft" style="padding:5px 10px;font-size:0.78rem;" data-action="order-children">Order questions</button>' : ''}
             </div>
           </div>
         </div>
@@ -588,7 +725,10 @@
 
       const textEl = nodeEl.querySelector(`[data-item-text="${item.id}"]`);
       setEditableContent(textEl, item.text, 'What\'s the topic?');
-      attachEditable(textEl, value => updateItemText(item.id, value), pushHistoryOnce);
+      if (!boardReadOnly) {
+        attachEditable(textEl, value => updateItemText(item.id, value), pushHistoryOnce);
+        textEl.addEventListener('focus', () => { state.ui.focusTarget = { kind: 'item', id: item.id }; });
+      }
     }
 
     nodeEl.onclick = e => handleItemNodeClick(e, item);
@@ -600,6 +740,9 @@
     const cc = colorClassForLabel(question.label);
     const isActive = state.ui.activeQuestionId === question.id;
     const activeClass = isActive ? 'is-active' : '';
+    const parent = state.entities.items[question.parentItemId];
+    const orderIndex = Math.max(0, parent?.questionIds.indexOf(question.id) ?? 0);
+    const boardReadOnly = phoneMedia.matches;
 
     // Dot color based on question type
     const dotColors = { why: '#ef476f', what: '#118ab2', how: '#06d6a0', who: '#f4a261', custom: '#8f7cf6', blank: '#94a3b8' };
@@ -618,14 +761,15 @@
       return `
         <div class="answer-bullet" data-answer-id="${answerId}">
           <div class="answer-bullet-row">
-            <div class="drag a-drag-handle" title="Drag to reorder answer">⋮⋮</div>
+            <div class="drag a-drag-handle" title="Drag to reorder answer" aria-hidden="${boardReadOnly ? 'true' : 'false'}">⋮⋮</div>
+            <span class="node-order-badge answer-order-badge" aria-label="Answer position ${bulletIndex + 1}">${bulletIndex + 1}</span>
             <div class="bullet-marker"></div>
-            <div class="answer-text-field" contenteditable="true" spellcheck="true" data-item-text="${answer.id}"></div>
+            <div class="answer-text-field" contenteditable="${boardReadOnly ? 'false' : 'true'}" spellcheck="true" data-item-text="${answer.id}"></div>
           </div>
           <div class="answer-bullet-actions node-chrome">
             ${childSpawnBtns}
             <button type="button" class="branch-spawn-btn custom" data-child-spawn-custom="1" data-answer-id="${answerId}">Custom →</button>
-            <button type="button" class="branch-spawn-btn" style="color:var(--muted);" data-delete-answer="${answerId}">✕</button>
+            <button type="button" class="branch-spawn-btn" style="color:var(--muted);" data-delete-answer="${answerId}" aria-label="Delete answer">✕</button>
           </div>
         </div>
       `;
@@ -639,10 +783,11 @@
       <div class="node-dot" style="background:${dotColor};"></div>
       <div class="node-question-card ${activeClass}">
         <div class="node-q-header">
-          <div class="drag q-drag-handle" title="Drag to reorder question">⋮⋮</div>
-          <div class="node-q-label" contenteditable="true" spellcheck="false" data-question-label="${question.id}"></div>
+          <div class="drag q-drag-handle" title="Move question card">⋮⋮</div>
+          <span class="node-order-badge" aria-label="Question position ${orderIndex + 1}">${orderIndex + 1}</span>
+          <div class="node-q-label" contenteditable="${boardReadOnly ? 'false' : 'true'}" spellcheck="false" data-question-label="${question.id}"></div>
           <div class="node-chrome" style="display:flex;gap:4px;flex-shrink:0;">
-            <button type="button" class="soft" style="padding:4px 8px;font-size:0.75rem;" data-action="delete-question">✕</button>
+            <button type="button" class="soft" style="padding:4px 8px;font-size:0.75rem;" data-action="delete-question" aria-label="Delete question">✕</button>
           </div>
         </div>
         <div class="node-q-body">
@@ -650,6 +795,7 @@
         </div>
         <div class="node-q-footer node-chrome">
           <button type="button" class="soft" style="padding:5px 10px;font-size:0.78rem;" data-action="add-answer">+ Answer</button>
+          ${question.answerIds.length > 1 ? '<button type="button" class="soft" style="padding:5px 10px;font-size:0.78rem;" data-action="order-children">Order answers</button>' : ''}
           ${canSplit ? `<button type="button" class="soft split-btn" data-action="split-bullets">Split into bullets</button>` : ''}
         </div>
       </div>
@@ -659,7 +805,10 @@
     const labelEl = nodeEl.querySelector(`[data-question-label="${question.id}"]`);
     if (labelEl) {
       setEditableContent(labelEl, question.label, 'Question…');
-      attachEditable(labelEl, value => updateQuestionLabel(question.id, value), pushHistoryOnce);
+      if (!boardReadOnly) {
+        attachEditable(labelEl, value => updateQuestionLabel(question.id, value), pushHistoryOnce);
+        labelEl.addEventListener('focus', () => { state.ui.focusTarget = { kind: 'question', id: question.id }; });
+      }
     }
 
     // Wire answer text editables and bullet drag-to-reorder
@@ -669,12 +818,13 @@
       const textEl = nodeEl.querySelector(`[data-item-text="${answer.id}"]`);
       if (textEl) {
         setEditableContent(textEl, answer.text, 'Write an answer…');
-        attachEditable(textEl, value => updateItemText(answerId, value), pushHistoryOnce);
+        if (!boardReadOnly) attachEditable(textEl, value => updateItemText(answerId, value), pushHistoryOnce);
       }
       const bulletEl = nodeEl.querySelector(`.answer-bullet[data-answer-id="${answerId}"]`);
       if (bulletEl) {
         if (textEl) {
           textEl.addEventListener('focus', () => {
+            state.ui.focusTarget = { kind: 'item', id: answer.id };
             nodeEl.querySelectorAll('.answer-bullet').forEach(b => b.classList.remove('answer-active'));
             bulletEl.classList.add('answer-active');
           });
@@ -694,7 +844,7 @@
         if (actionsEl) actionsEl.addEventListener('mousedown', e => e.preventDefault());
         const dragType = 'a-' + question.id;
         bulletEl.dataset.dragType = dragType;
-        bulletEl.draggable = true;
+        bulletEl.draggable = !boardReadOnly;
         bulletEl.addEventListener('dragstart', e => {
           if (!e.target.closest('.a-drag-handle')) { e.preventDefault(); return; }
           e.stopPropagation();
@@ -753,6 +903,11 @@
       addSource(item.id);
       return;
     }
+    if (action === 'order-children') {
+      e.stopPropagation();
+      openOrderSheet({ kind: 'item', id: item.id }, e.target);
+      return;
+    }
     if (spawnLabel) {
       e.stopPropagation();
       spawnQuestion(item.id, spawnLabel);
@@ -770,7 +925,8 @@
       return;
     }
     // Click on chip or card background expands
-    if (!e.target.closest('[contenteditable], input, button')) {
+    if (!e.target.closest('[contenteditable="true"], input, button')) {
+      state.ui.focusTarget = { kind: 'item', id: item.id };
       setFocusedNode(item.id);
       if (item.nodeMode !== 'expanded') {
         setExpandedNode(item.id, 'expanded');
@@ -792,6 +948,11 @@
     if (action === 'add-answer') {
       e.stopPropagation();
       addAnswerToQuestion(question.id);
+      return;
+    }
+    if (action === 'order-children') {
+      e.stopPropagation();
+      openOrderSheet({ kind: 'question', id: question.id }, e.target);
       return;
     }
     if (action === 'split-bullets') {
@@ -817,8 +978,15 @@
       return;
     }
 
+    if (!e.target.closest('button, input, [contenteditable="true"]')) {
+      const answerId = e.target.closest('[data-answer-id]')?.dataset?.answerId;
+      state.ui.focusTarget = answerId
+        ? { kind: 'item', id: answerId }
+        : { kind: 'question', id: question.id };
+    }
+
     // Clicking the card activates this question
-    if (!e.target.closest('[contenteditable], input, button')) {
+    if (!e.target.closest('[contenteditable="true"], input, button')) {
       state.ui.activeQuestionId = question.id;
       setFocusedNode(question.parentItemId);
       persist();
@@ -851,8 +1019,12 @@
 
   // ── Pan / zoom ────────────────────────────────────────────────────────────
 
+  function canvasState() {
+    return phoneMedia.matches ? state.ui.phoneCanvas : state.ui.canvas;
+  }
+
   function applyTransform() {
-    const { panX, panY, scale } = state.ui.canvas;
+    const { panX, panY, scale } = canvasState();
     const t = `translate(${panX}px, ${panY}px) scale(${scale})`;
     els.canvasWorld.style.transform = t;
     els.connectionLayer.style.transform = t;
@@ -860,7 +1032,7 @@
   }
 
   function updateFidelityClass() {
-    const scale = state.ui.canvas.scale;
+    const scale = canvasState().scale;
     els.canvasWorld.classList.remove('fidelity-full', 'fidelity-medium', 'fidelity-abstract');
     if (scale >= 0.6) els.canvasWorld.classList.add('fidelity-full');
     else if (scale >= 0.3) els.canvasWorld.classList.add('fidelity-medium');
@@ -869,7 +1041,7 @@
   }
 
   function updateZoomReadout() {
-    if (els.resetZoomBtn) els.resetZoomBtn.textContent = Math.round(state.ui.canvas.scale * 100) + '%';
+    if (els.resetZoomBtn) els.resetZoomBtn.textContent = Math.round(canvasState().scale * 100) + '%';
   }
 
   const clampScale = s => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, s));
@@ -894,12 +1066,13 @@
 
   // Zoom while keeping the given viewport point fixed under the cursor.
   function zoomToPoint(px, py, factor) {
-    const { panX, panY, scale } = state.ui.canvas;
+    const canvas = canvasState();
+    const { panX, panY, scale } = canvas;
     const newScale = clampScale(scale * factor);
     const actual = newScale / scale;
-    state.ui.canvas.panX = px - (px - panX) * actual;
-    state.ui.canvas.panY = py - (py - panY) * actual;
-    state.ui.canvas.scale = newScale;
+    canvas.panX = px - (px - panX) * actual;
+    canvas.panY = py - (py - panY) * actual;
+    canvas.scale = newScale;
     applyTransform();
     updateFidelityClass();
   }
@@ -912,9 +1085,10 @@
   }
 
   function setCanvasTransform(panX, panY, scale) {
-    state.ui.canvas.panX = panX;
-    state.ui.canvas.panY = panY;
-    state.ui.canvas.scale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, scale));
+    const canvas = canvasState();
+    canvas.panX = panX;
+    canvas.panY = panY;
+    canvas.scale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, scale));
     applyTransform();
     updateFidelityClass();
     persist();
@@ -935,18 +1109,20 @@
       let dx = e.deltaX * lineScale;
       let dy = e.deltaY * lineScale;
       if (e.shiftKey && dx === 0) { dx = dy; dy = 0; }
-      state.ui.canvas.panX -= dx;
-      state.ui.canvas.panY -= dy;
+      const canvas = canvasState();
+      canvas.panX -= dx;
+      canvas.panY -= dy;
       applyTransform();
     }
     schedulePersistCanvas();
   }
 
   function startNodeDrag(e, questionId, nodeEl, pos) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
     const rect = els.boardView.getBoundingClientRect();
-    const { panX, panY, scale } = state.ui.canvas;
+    const { panX, panY, scale } = canvasState();
     const mx = (e.clientX - rect.left - panX) / scale;
     const my = (e.clientY - rect.top  - panY) / scale;
     nodeDragState = {
@@ -955,6 +1131,44 @@
       startX: pos.x, startY: pos.y,
     };
     nodeEl.style.cursor = 'grabbing';
+    const handle = e.currentTarget;
+    handle.setPointerCapture?.(e.pointerId);
+
+    const onMove = moveEvent => {
+      if (!nodeDragState) return;
+      const boardRect = els.boardView.getBoundingClientRect();
+      const canvas = canvasState();
+      const pointerX = (moveEvent.clientX - boardRect.left - canvas.panX) / canvas.scale;
+      const pointerY = (moveEvent.clientY - boardRect.top - canvas.panY) / canvas.scale;
+      const newX = nodeDragState.startX + (pointerX - nodeDragState.startMX);
+      const newY = nodeDragState.startY + (pointerY - nodeDragState.startMY);
+      const question = state.entities.questions[nodeDragState.questionId];
+      if (question) {
+        question.manualX = newX;
+        question.manualY = newY;
+      }
+      nodeDragState.nodeEl.style.left = `${newX}px`;
+      nodeDragState.nodeEl.style.top = `${newY}px`;
+      renderConnections(computeLayout());
+    };
+
+    const onEnd = endEvent => {
+      if (!nodeDragState) return;
+      if (handle.hasPointerCapture?.(endEvent.pointerId)) {
+        handle.releasePointerCapture(endEvent.pointerId);
+      }
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onEnd);
+      handle.removeEventListener('pointercancel', onEnd);
+      nodeDragState.nodeEl.style.cursor = '';
+      nodeDragState = null;
+      persist();
+      renderCanvas();
+    };
+
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onEnd);
+    handle.addEventListener('pointercancel', onEnd);
   }
 
   function arrangeLayout() {
@@ -968,70 +1182,113 @@
 
   function initPanEvents() {
     let didPan = false;
+    const pointers = new Map();
+    let pinchStart = null;
 
     els.boardView.addEventListener('wheel', handleWheel, { passive: false });
 
     els.boardView.addEventListener('click', e => {
-      if (didPan) { didPan = false; return; }
+      if (didPan) {
+        didPan = false;
+        // Pointer-generated clicks have a non-zero detail. Preserve keyboard
+        // activation (detail === 0) if it happens to be the next interaction
+        // after a pan.
+        if (e.detail !== 0) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }
+    }, true);
+
+    els.boardView.addEventListener('click', e => {
       if (e.target.closest('.node')) return;
       if (state.ui.selectedItemId || state.ui.activeQuestionId) {
         state.ui.selectedItemId = null;
         state.ui.activeQuestionId = null;
         persist();
         renderCanvas();
+        updateButtons();
       }
     });
 
-    els.boardView.addEventListener('mousedown', e => {
-      if (e.target.closest('[data-node-id], button, [contenteditable], input, select')) return;
+    els.boardView.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      const isInteractive = e.target.closest('button, [contenteditable="true"], input, select, textarea, a');
+      if (isInteractive) return;
+      if (!phoneMedia.matches && e.target.closest('[data-node-id]')) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      els.boardView.setPointerCapture?.(e.pointerId);
+      const canvas = canvasState();
+      if (pointers.size === 1) {
+        panStart = { x: e.clientX - canvas.panX, y: e.clientY - canvas.panY };
+        didPan = false;
+      } else if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        const rect = els.boardView.getBoundingClientRect();
+        const midX = (a.x + b.x) / 2 - rect.left;
+        const midY = (a.y + b.y) / 2 - rect.top;
+        pinchStart = {
+          distance: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+          scale: canvas.scale,
+          worldX: (midX - canvas.panX) / canvas.scale,
+          worldY: (midY - canvas.panY) / canvas.scale,
+        };
+      }
       isPanning = true;
-      didPan = false;
-      panStart = { x: e.clientX - state.ui.canvas.panX, y: e.clientY - state.ui.canvas.panY };
       els.boardView.classList.add('is-panning');
     });
 
-    window.addEventListener('mousemove', e => {
-      if (nodeDragState) {
+    els.boardView.addEventListener('pointermove', e => {
+      if (!pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const canvas = canvasState();
+      if (pointers.size >= 2 && pinchStart) {
+        const [a, b] = [...pointers.values()];
         const rect = els.boardView.getBoundingClientRect();
-        const { panX, panY, scale } = state.ui.canvas;
-        const mx = (e.clientX - rect.left - panX) / scale;
-        const my = (e.clientY - rect.top  - panY) / scale;
-        const newX = nodeDragState.startX + (mx - nodeDragState.startMX);
-        const newY = nodeDragState.startY + (my - nodeDragState.startMY);
-        const q = state.entities.questions[nodeDragState.questionId];
-        if (q) { q.manualX = newX; q.manualY = newY; }
-        nodeDragState.nodeEl.style.left = newX + 'px';
-        nodeDragState.nodeEl.style.top  = newY + 'px';
-        renderConnections(computeLayout());
+        const midX = (a.x + b.x) / 2 - rect.left;
+        const midY = (a.y + b.y) / 2 - rect.top;
+        const distance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+        canvas.scale = clampScale(pinchStart.scale * distance / pinchStart.distance);
+        canvas.panX = midX - pinchStart.worldX * canvas.scale;
+        canvas.panY = midY - pinchStart.worldY * canvas.scale;
+        didPan = true;
+        applyTransform();
+        updateFidelityClass();
         return;
       }
-      if (!isPanning) return;
-      didPan = true;
+      if (pointers.size !== 1) return;
       const newPanX = e.clientX - panStart.x;
       const newPanY = e.clientY - panStart.y;
-      state.ui.canvas.panX = newPanX;
-      state.ui.canvas.panY = newPanY;
+      if (Math.abs(newPanX - canvas.panX) + Math.abs(newPanY - canvas.panY) > 3) didPan = true;
+      canvas.panX = newPanX;
+      canvas.panY = newPanY;
       applyTransform();
     });
 
-    window.addEventListener('mouseup', () => {
-      if (nodeDragState) {
-        nodeDragState.nodeEl.style.cursor = '';
-        persist();
-        renderCanvas();
-        nodeDragState = null;
-        return;
+    const endPointer = e => {
+      pointers.delete(e.pointerId);
+      if (els.boardView.hasPointerCapture?.(e.pointerId)) {
+        els.boardView.releasePointerCapture(e.pointerId);
       }
-      if (!isPanning) return;
-      isPanning = false;
-      els.boardView.classList.remove('is-panning');
-      persist();
-    });
+      if (pointers.size === 1) {
+        const remaining = [...pointers.values()][0];
+        const canvas = canvasState();
+        panStart = { x: remaining.x - canvas.panX, y: remaining.y - canvas.panY };
+      } else if (!pointers.size) {
+        isPanning = false;
+        pinchStart = null;
+        els.boardView.classList.remove('is-panning');
+        schedulePersistCanvas();
+      }
+    };
+    els.boardView.addEventListener('pointerup', endPointer);
+    els.boardView.addEventListener('pointercancel', endPointer);
+
   }
 
   function resetZoom() {
     animateTransformOnce();
-    setCanvasTransform(60, 60, 1.0);
+    setCanvasTransform(phoneMedia.matches ? 24 : 60, phoneMedia.matches ? 24 : 60, 1.0);
   }
 
   function fitView() {
@@ -1071,7 +1328,7 @@
 
   // ── Node mutation helpers ─────────────────────────────────────────────────
 
-  function spawnQuestion(parentItemId, label) {
+  function spawnQuestion(parentItemId, label, { stayInFocus = false } = {}) {
     const item = state.entities.items[parentItemId];
     if (!item) return;
     pushHistory();
@@ -1080,19 +1337,24 @@
     createItemInternal(state, { kind: 'answer', text: '', parentQuestionId: q.id });
     state.ui.activeQuestionId = q.id;
     state.ui.selectedItemId = parentItemId;
+    if (stayInFocus) state.ui.focusTarget = { kind: 'item', id: parentItemId };
     persist();
     render();
     requestAnimationFrame(() => {
-      zoomToNode(q.id);
-      const answerEl = document.querySelector(`[data-node-id="${q.id}"] [data-item-text]`);
-      if (answerEl) { answerEl.focus(); }
+      if (stayInFocus) {
+        focusWithoutHistory(document.getElementById(`focus-child-${q.id}`));
+      } else {
+        zoomToNode(q.id);
+        const answerEl = document.querySelector(`[data-node-id="${q.id}"] [data-item-text]`);
+        focusWithoutHistory(answerEl);
+      }
     });
   }
 
   // Custom questions spawn a new card with a blank, editable title and drop the
   // cursor straight into it — no naming popup — so the discussion can continue
   // inline. An optional label lets callers pre-fill the title if they want.
-  function addCustomQuestion(parentItemId, label = '') {
+  function addCustomQuestion(parentItemId, label = '', { stayInFocus = false } = {}) {
     const item = state.entities.items[parentItemId];
     if (!item) return;
     pushHistory();
@@ -1100,23 +1362,31 @@
     createItemInternal(state, { kind: 'answer', text: '', parentQuestionId: q.id });
     state.ui.activeQuestionId = q.id;
     state.ui.selectedItemId = parentItemId;
+    if (stayInFocus) state.ui.focusTarget = { kind: 'item', id: parentItemId };
     persist();
     render();
     requestAnimationFrame(() => {
-      zoomToNode(q.id);
-      focusEditable(`[data-node-id="${q.id}"] [data-question-label="${q.id}"]`);
+      if (stayInFocus) focusWithoutHistory(document.getElementById(`focus-child-${q.id}`));
+      else {
+        zoomToNode(q.id);
+        focusEditable(`[data-node-id="${q.id}"] [data-question-label="${q.id}"]`);
+      }
     });
   }
 
-  function addAnswerToQuestion(questionId) {
+  function addAnswerToQuestion(questionId, { stayInFocus = false } = {}) {
     const q = state.entities.questions[questionId];
     if (!q) return;
     pushHistory();
     const item = createItemInternal(state, { kind: 'answer', text: '', parentQuestionId: questionId });
     state.ui.activeQuestionId = questionId;
+    if (stayInFocus) state.ui.focusTarget = { kind: 'question', id: questionId };
     persist();
-    renderCanvas();
-    requestAnimationFrame(() => focusEditable(`[data-node-id="${questionId}"] [data-item-text="${item.id}"]`));
+    render();
+    requestAnimationFrame(() => {
+      if (stayInFocus) focusWithoutHistory(document.getElementById(`focus-child-${item.id}`));
+      else focusEditable(`[data-node-id="${questionId}"] [data-item-text="${item.id}"]`);
+    });
   }
 
   function splitAnswerIntoBullets(questionId) {
@@ -1140,7 +1410,7 @@
   function focusEditable(selector) {
     const el = document.querySelector(selector);
     if (!el) return;
-    el.focus();
+    focusWithoutHistory(el);
     const range = document.createRange();
     range.selectNodeContents(el);
     range.collapse(false);
@@ -1178,6 +1448,7 @@
       () => {
         pushHistory();
         deleteQuestionRecursive(questionId);
+        normalizeState();
         persist();
         render();
       }
@@ -1234,7 +1505,10 @@
     pushHistory();
     item.sourceList.push({ id: uid('src'), label: '', url: '', note: '' });
     persist();
-    renderCanvas();
+    render();
+    requestAnimationFrame(() => {
+      focusWithoutHistory(els.focusCurrent?.querySelector(`[data-focus-source-item="${itemId}"]:last-child input`));
+    });
   }
 
   function updateSource(itemId, sourceId, key, value) {
@@ -1246,6 +1520,7 @@
     source[key] = value;
     item.updatedAt = Date.now();
     schedulePersist();
+    renderOutlineText();
   }
 
   function deleteSource(itemId, sourceId) {
@@ -1254,7 +1529,7 @@
     pushHistory();
     item.sourceList = item.sourceList.filter(s => s.id !== sourceId);
     persist();
-    renderCanvas();
+    render();
   }
 
   // ── Source editor HTML builder ────────────────────────────────────────────
@@ -1297,7 +1572,6 @@
   function renderOutlineText() {
     const text = generateOutline();
     els.outlineText.textContent = text;
-    els.outlineViewText.textContent = text;
   }
 
   // "Overview then systematic dive" outline. At each element we first list its
@@ -1381,68 +1655,533 @@
     return String(text || '').replace(/\s+/g, ' ').trim() || '[blank]';
   }
 
+  // ── Focus workspace ────────────────────────────────────────────────────────
+
+  function currentFocusTarget() {
+    if (targetExists(state, state.ui.focusTarget)) return state.ui.focusTarget;
+    const rootId = state.roots.find(id => state.entities.items[id]);
+    return rootId ? { kind: 'item', id: rootId } : null;
+  }
+
+  function focusTargetKey(target) {
+    return `${target.kind}:${target.id}`;
+  }
+
+  function focusTargetButton(target, className = '') {
+    return `<button type="button" class="${className}" data-focus-kind="${target.kind}" data-focus-id="${target.id}">${escapeHtml(targetLabel(state, target))}</button>`;
+  }
+
+  function renderFocus() {
+    if (state.settings.mainView !== 'focus') return;
+    const target = currentFocusTarget();
+    const context = target ? getFocusContext(state, target) : null;
+    if (!context) {
+      els.focusBreadcrumbs.innerHTML = '';
+      els.focusContext.innerHTML = '';
+      els.focusCurrent.innerHTML = '<div class="focus-card empty-state">No topic is available.</div>';
+      els.focusChildren.innerHTML = '';
+      return;
+    }
+
+    const breadcrumbTargets = [...context.ancestors, context.current];
+    els.focusBreadcrumbs.innerHTML = breadcrumbTargets.map((part, index) => `
+      ${index ? '<span class="breadcrumb-separator" aria-hidden="true">›</span>' : ''}
+      ${focusTargetButton(part, `breadcrumb-button${focusTargetKey(part) === focusTargetKey(context.current) ? ' current' : ''}`)}
+    `).join('');
+
+    const siblings = context.siblings;
+    els.focusContext.innerHTML = `
+      <div class="focus-context-parent">
+        <span class="focus-eyebrow">${context.parent ? 'One level up' : 'Topics'}</span>
+        ${context.parent
+          ? focusTargetButton(context.parent, 'focus-parent-button')
+          : `<span class="focus-parent-label">Top level</span>
+             ${siblings.length > 1 ? '<button type="button" class="soft" data-order-kind="roots" data-order-id="">Order topics</button>' : ''}`}
+      </div>
+      ${siblings.length > 1 ? `
+        <div class="focus-sibling-strip" aria-label="Siblings">
+          ${siblings.map(sibling => focusTargetButton(
+            sibling,
+            `sibling-chip${focusTargetKey(sibling) === focusTargetKey(context.current) ? ' active' : ''}`,
+          )).join('')}
+        </div>
+      ` : ''}
+    `;
+
+    els.focusCurrent.innerHTML = buildFocusCurrentHtml(context.current, context.children);
+    els.focusChildren.innerHTML = buildFocusChildrenHtml(context.current, context.children);
+    wireFocusInputs();
+    wireFocusActions();
+    wirePointerReorder(els.focusChildren.querySelector('.focus-child-list'), context.current);
+  }
+
+  function buildFocusCurrentHtml(target, children) {
+    const childNoun = target.kind === 'item' ? 'questions' : 'answers';
+    if (target.kind === 'item') {
+      const item = state.entities.items[target.id];
+      return `
+        <article class="focus-card focus-editor-card">
+          <div class="focus-card-heading">
+          <div>
+            <div class="focus-eyebrow">${item.kind === 'topic' ? 'Topic' : 'Answer'}</div>
+            <h2>${escapeHtml(itemLabel(item))}</h2>
+          </div>
+          <div class="focus-card-tools">
+            <button type="button" class="soft focus-order-button" data-order-kind="item" data-order-id="${item.id}" ${children.length < 2 ? 'disabled' : ''}>Order ${childNoun}</button>
+            <button type="button" class="soft danger-soft" data-focus-delete-kind="item" data-focus-delete-id="${item.id}">Delete ${item.kind === 'topic' ? 'topic' : 'answer'}</button>
+          </div>
+          </div>
+          <label class="field-label" for="focus-current-text">Content</label>
+          <textarea id="focus-current-text" class="focus-textarea" data-focus-item-text="${item.id}" rows="3" placeholder="${item.kind === 'topic' ? 'What’s the topic?' : 'Write an answer…'}">${escapeHtml(item.text || '')}</textarea>
+          <section class="focus-source-section" aria-label="Sources">
+            <div class="focus-section-heading">
+              <div>
+                <h3>Sources</h3>
+                <p>Keep references attached to this ${item.kind === 'topic' ? 'topic' : 'answer'}.</p>
+              </div>
+              <button type="button" class="soft" data-focus-action="add-source" data-item-id="${item.id}">+ Source</button>
+            </div>
+            <div class="focus-source-list">
+              ${(item.sourceList || []).map(source => buildFocusSourceHtml(item, source)).join('') || '<p class="focus-muted">No sources yet.</p>'}
+            </div>
+          </section>
+        </article>
+      `;
+    }
+
+    const question = state.entities.questions[target.id];
+    const singleAnswer = question.answerIds.length === 1 ? state.entities.items[question.answerIds[0]] : null;
+    const canSplit = singleAnswer
+      && (singleAnswer.text || '').includes('\n')
+      && singleAnswer.text.split('\n').filter(line => line.trim()).length > 1;
+    return `
+      <article class="focus-card focus-editor-card">
+        <div class="focus-card-heading">
+          <div>
+            <div class="focus-eyebrow">Question</div>
+            <h2>${escapeHtml((question.label || '').trim() || 'Untitled question')}</h2>
+          </div>
+          <div class="focus-card-tools">
+            <button type="button" class="soft focus-order-button" data-order-kind="question" data-order-id="${question.id}" ${children.length < 2 ? 'disabled' : ''}>Order answers</button>
+            ${canSplit ? `<button type="button" class="soft" data-focus-action="split-answers" data-question-id="${question.id}">Split lines into answers</button>` : ''}
+            <button type="button" class="soft danger-soft" data-focus-delete-kind="question" data-focus-delete-id="${question.id}">Delete question</button>
+          </div>
+        </div>
+        <label class="field-label" for="focus-current-question">Question</label>
+        <input id="focus-current-question" class="focus-input" type="text" data-focus-question-label="${question.id}" value="${escapeAttr(question.label || '')}" placeholder="Question…" />
+      </article>
+    `;
+  }
+
+  function buildFocusSourceHtml(item, source) {
+    const safeUrl = /^https?:\/\//i.test(source.url || '') ? source.url : null;
+    return `
+      <div class="focus-source-card" data-focus-source-id="${source.id}" data-focus-source-item="${item.id}">
+        <label>Label<input type="text" data-source-key="label" value="${escapeAttr(source.label || '')}" placeholder="Source label" /></label>
+        <label>URL<input type="url" data-source-key="url" value="${escapeAttr(source.url || '')}" placeholder="https://…" /></label>
+        <label class="source-note-field">Note<input type="text" data-source-key="note" value="${escapeAttr(source.note || '')}" placeholder="Optional note" /></label>
+        <div class="focus-source-actions">
+          ${safeUrl ? `<a class="soft-link" href="${escapeAttr(safeUrl)}" target="_blank" rel="noopener noreferrer">Open source ↗</a>` : '<span></span>'}
+          <button type="button" class="soft danger-soft" data-focus-action="delete-source" data-item-id="${item.id}" data-source-id="${source.id}">Delete</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function buildFocusChildrenHtml(parent, children) {
+    const isItem = parent.kind === 'item';
+    const title = isItem ? 'Questions' : 'Answers';
+    const emptyText = isItem
+      ? 'Add a question to start exploring this item.'
+      : 'Add an answer to continue this branch.';
+    return `
+      <div class="focus-section-heading children-heading">
+        <div>
+          <span class="focus-eyebrow">One level down</span>
+          <h2>${title}</h2>
+          <p>${children.length} ${children.length === 1 ? title.slice(0, -1).toLowerCase() : title.toLowerCase()}</p>
+        </div>
+        <div class="focus-add-actions">
+          ${isItem ? DEFAULT_QUESTIONS.map(label => `
+            <button type="button" class="spawn-btn ${colorClassForLabel(label)}" data-focus-spawn="${label}" data-parent-id="${parent.id}">${label}</button>
+          `).join('') + `<button type="button" class="spawn-btn custom" data-focus-spawn-custom="1" data-parent-id="${parent.id}">+ Custom</button>`
+          : `<button type="button" class="primary" data-focus-action="add-answer" data-question-id="${parent.id}">+ Answer</button>`}
+        </div>
+      </div>
+      <div class="focus-child-list" data-order-parent-kind="${parent.kind}" data-order-parent-id="${parent.id}">
+        ${children.map((child, index) => buildFocusChildRow(parent, child, index, children.length)).join('')
+          || `<div class="focus-empty-children">${emptyText}</div>`}
+      </div>
+    `;
+  }
+
+  function buildFocusChildRow(parent, child, index, total) {
+    const isQuestion = child.kind === 'question';
+    const entity = isQuestion ? state.entities.questions[child.id] : state.entities.items[child.id];
+    const label = isQuestion ? 'Question' : 'Answer';
+    return `
+      <article class="focus-child-row" data-order-child-id="${child.id}">
+        <button type="button" class="order-drag-handle" aria-label="Reorder ${label.toLowerCase()}. Drag or use arrow keys." title="Drag or use arrow keys to reorder">⋮⋮</button>
+        <span class="order-index" aria-label="Position ${index + 1}">${index + 1}</span>
+        <div class="focus-child-editor">
+          <label class="field-label" for="focus-child-${child.id}">${label}</label>
+          ${isQuestion
+            ? `<input id="focus-child-${child.id}" class="focus-input" type="text" data-focus-question-label="${child.id}" value="${escapeAttr(entity.label || '')}" placeholder="Question…" />`
+            : `<textarea id="focus-child-${child.id}" class="focus-textarea compact" data-focus-item-text="${child.id}" rows="2" placeholder="Write an answer…">${escapeHtml(entity.text || '')}</textarea>`}
+        </div>
+        <div class="focus-child-actions">
+          <button type="button" class="soft move-button" data-move-child="${child.id}" data-parent-kind="${parent.kind}" data-parent-id="${parent.id}" data-direction="-1" aria-label="Move ${label.toLowerCase()} up" ${index === 0 ? 'disabled' : ''}>↑</button>
+          <button type="button" class="soft move-button" data-move-child="${child.id}" data-parent-kind="${parent.kind}" data-parent-id="${parent.id}" data-direction="1" aria-label="Move ${label.toLowerCase()} down" ${index === total - 1 ? 'disabled' : ''}>↓</button>
+          <button type="button" class="primary focus-open-child" data-focus-kind="${child.kind}" data-focus-id="${child.id}">Focus <span aria-hidden="true">→</span></button>
+          <button type="button" class="soft danger-soft" data-focus-delete-kind="${child.kind}" data-focus-delete-id="${child.id}" aria-label="Delete ${label.toLowerCase()}">Delete</button>
+        </div>
+      </article>
+    `;
+  }
+
+  function wireFocusInputs() {
+    els.focusView.querySelectorAll('[data-focus-item-text]').forEach(field => {
+      autoGrowField(field);
+      field.addEventListener('focus', pushHistoryOnce);
+      field.addEventListener('input', () => {
+        const item = state.entities.items[field.dataset.focusItemText];
+        if (!item) return;
+        item.text = field.value;
+        item.updatedAt = Date.now();
+        autoGrowField(field);
+        schedulePersist();
+        renderOutlineText();
+      });
+    });
+    els.focusView.querySelectorAll('[data-focus-question-label]').forEach(field => {
+      field.addEventListener('focus', pushHistoryOnce);
+      field.addEventListener('input', () => {
+        const question = state.entities.questions[field.dataset.focusQuestionLabel];
+        if (!question) return;
+        question.label = field.value;
+        question.updatedAt = Date.now();
+        schedulePersist();
+        renderOutlineText();
+      });
+    });
+    els.focusView.querySelectorAll('[data-focus-source-id] input').forEach(field => {
+      field.addEventListener('focus', pushHistoryOnce);
+      field.addEventListener('input', () => {
+        const card = field.closest('[data-focus-source-id]');
+        updateSource(card.dataset.focusSourceItem, card.dataset.focusSourceId, field.dataset.sourceKey, field.value);
+      });
+    });
+  }
+
+  function autoGrowField(field) {
+    if (field.tagName !== 'TEXTAREA') return;
+    field.style.height = 'auto';
+    field.style.height = `${Math.max(field.scrollHeight, 72)}px`;
+  }
+
+  function wireFocusActions() {
+    els.focusView.querySelectorAll('[data-focus-kind][data-focus-id]').forEach(button => {
+      button.addEventListener('click', () => setFocusTarget({
+        kind: button.dataset.focusKind,
+        id: button.dataset.focusId,
+      }));
+    });
+    els.focusView.querySelectorAll('[data-focus-spawn]').forEach(button => {
+      button.addEventListener('click', () => spawnQuestion(button.dataset.parentId, button.dataset.focusSpawn, { stayInFocus: true }));
+    });
+    els.focusView.querySelectorAll('[data-focus-spawn-custom]').forEach(button => {
+      button.addEventListener('click', () => addCustomQuestion(button.dataset.parentId, '', { stayInFocus: true }));
+    });
+    els.focusView.querySelectorAll('[data-focus-action="add-answer"]').forEach(button => {
+      button.addEventListener('click', () => addAnswerToQuestion(button.dataset.questionId, { stayInFocus: true }));
+    });
+    els.focusView.querySelectorAll('[data-focus-action="split-answers"]').forEach(button => {
+      button.addEventListener('click', () => splitAnswerIntoBullets(button.dataset.questionId));
+    });
+    els.focusView.querySelectorAll('[data-focus-action="add-source"]').forEach(button => {
+      button.addEventListener('click', () => addSource(button.dataset.itemId));
+    });
+    els.focusView.querySelectorAll('[data-focus-action="delete-source"]').forEach(button => {
+      button.addEventListener('click', () => deleteSource(button.dataset.itemId, button.dataset.sourceId));
+    });
+    els.focusView.querySelectorAll('[data-focus-delete-kind]').forEach(button => {
+      button.addEventListener('click', () => {
+        if (button.dataset.focusDeleteKind === 'question') deleteQuestion(button.dataset.focusDeleteId);
+        else deleteItem(button.dataset.focusDeleteId);
+      });
+    });
+    els.focusView.querySelectorAll('[data-order-kind]').forEach(button => {
+      button.addEventListener('click', () => openOrderSheet({
+        kind: button.dataset.orderKind,
+        id: button.dataset.orderId,
+      }, button));
+    });
+    els.focusView.querySelectorAll('[data-move-child]').forEach(button => {
+      button.addEventListener('click', () => {
+        const parent = { kind: button.dataset.parentKind, id: button.dataset.parentId };
+        moveChild(parent, button.dataset.moveChild, Number(button.dataset.direction));
+      });
+    });
+  }
+
+  function moveChild(parent, childId, directionOrIndex, { absolute = false } = {}) {
+    const children = parent.kind === 'roots'
+      ? state.roots
+      : parent.kind === 'item'
+        ? state.entities.items[parent.id]?.questionIds
+        : state.entities.questions[parent.id]?.answerIds;
+    if (!children) return false;
+    const from = children.indexOf(childId);
+    const targetIndex = absolute ? directionOrIndex : from + directionOrIndex;
+    if (from < 0 || targetIndex < 0 || targetIndex >= children.length || from === targetIndex) return false;
+    const activeElement = document.activeElement;
+    const restoreHandle = activeElement?.classList.contains('order-drag-handle');
+    const restoreDirection = activeElement?.dataset?.direction;
+    pushHistory();
+    if (!moveChildInState(state, parent, childId, targetIndex)) return false;
+    persist();
+    render();
+    requestAnimationFrame(() => {
+      const scope = els.orderBackdrop.classList.contains('open') ? els.orderList : els.focusChildren;
+      const row = scope.querySelector(`[data-order-child-id="${childId}"]`);
+      const preferred = restoreHandle
+        ? row?.querySelector('.order-drag-handle')
+        : restoreDirection
+          ? row?.querySelector(`[data-direction="${restoreDirection}"]:not([disabled])`)
+          : null;
+      (preferred || row?.querySelector('.order-drag-handle'))?.focus();
+    });
+    flash('Order updated.');
+    return true;
+  }
+
+  function wirePointerReorder(container, parent) {
+    if (!container) return;
+    container.querySelectorAll('.order-drag-handle').forEach(handle => {
+      handle.addEventListener('keydown', event => {
+        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+        const row = handle.closest('[data-order-child-id]');
+        if (!row) return;
+        event.preventDefault();
+        moveChild(parent, row.dataset.orderChildId, event.key === 'ArrowUp' ? -1 : 1);
+      });
+      handle.addEventListener('pointerdown', event => {
+        if (event.button !== 0) return;
+        const row = handle.closest('[data-order-child-id]');
+        if (!row) return;
+        event.preventDefault();
+        handle.setPointerCapture(event.pointerId);
+        row.classList.add('is-reordering');
+        const onMove = moveEvent => {
+          const candidate = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest('[data-order-child-id]');
+          if (!candidate || candidate === row || candidate.parentElement !== container) return;
+          const rect = candidate.getBoundingClientRect();
+          container.insertBefore(row, moveEvent.clientY < rect.top + rect.height / 2 ? candidate : candidate.nextSibling);
+        };
+        const onEnd = endEvent => {
+          row.classList.remove('is-reordering');
+          if (handle.hasPointerCapture?.(endEvent.pointerId)) {
+            handle.releasePointerCapture(endEvent.pointerId);
+          }
+          handle.removeEventListener('pointermove', onMove);
+          handle.removeEventListener('pointerup', onEnd);
+          handle.removeEventListener('pointercancel', onEnd);
+          const toIndex = [...container.querySelectorAll('[data-order-child-id]')].indexOf(row);
+          moveChild(parent, row.dataset.orderChildId, toIndex, { absolute: true });
+        };
+        handle.addEventListener('pointermove', onMove);
+        handle.addEventListener('pointerup', onEnd);
+        handle.addEventListener('pointercancel', onEnd);
+      });
+    });
+  }
+
+  function openOrderSheet(parent, trigger) {
+    const children = getChildTargets(state, parent);
+    if (children.length < 2) return;
+    orderSheetParent = { kind: parent.kind, id: parent.id };
+    lastDialogTrigger = trigger || document.activeElement;
+    renderOrderSheet();
+    els.orderBackdrop.classList.add('open');
+    els.orderBackdrop.setAttribute('aria-hidden', 'false');
+    setBackgroundInert(true);
+    requestAnimationFrame(() => els.closeOrderSheetBtn.focus());
+  }
+
+  function renderOrderSheet() {
+    if (!orderSheetParent) return;
+    const children = getChildTargets(state, orderSheetParent);
+    const noun = orderSheetParent.kind === 'roots'
+      ? 'topics'
+      : orderSheetParent.kind === 'item'
+        ? 'questions'
+        : 'answers';
+    els.orderSheetTitle.textContent = `Order ${noun}`;
+    const parentLabel = orderSheetParent.kind === 'roots' ? 'top-level topics' : targetLabel(state, orderSheetParent);
+    els.orderSheetSubtitle.textContent = `Semantic order for ${parentLabel}. Spatial positions are preserved.`;
+    els.orderList.innerHTML = children.map((child, index) => `
+      <div class="order-sheet-row" data-order-child-id="${child.id}">
+        <button type="button" class="order-drag-handle" aria-label="Reorder child. Drag or use arrow keys.">⋮⋮</button>
+        <span class="order-index">${index + 1}</span>
+        <span class="order-row-label">${escapeHtml(targetLabel(state, child))}</span>
+        <button type="button" class="soft move-button" data-order-move="${child.id}" data-direction="-1" aria-label="Move up" ${index === 0 ? 'disabled' : ''}>↑</button>
+        <button type="button" class="soft move-button" data-order-move="${child.id}" data-direction="1" aria-label="Move down" ${index === children.length - 1 ? 'disabled' : ''}>↓</button>
+      </div>
+    `).join('');
+    els.orderList.querySelectorAll('[data-order-move]').forEach(button => {
+      button.addEventListener('click', () => moveChild(orderSheetParent, button.dataset.orderMove, Number(button.dataset.direction)));
+    });
+    wirePointerReorder(els.orderList, orderSheetParent);
+  }
+
+  function closeOrderSheet() {
+    els.orderBackdrop.classList.remove('open');
+    els.orderBackdrop.setAttribute('aria-hidden', 'true');
+    setBackgroundInert(false);
+    orderSheetParent = null;
+    if (lastDialogTrigger?.isConnected) lastDialogTrigger.focus();
+    else els.focusCurrent?.querySelector('[data-order-kind]')?.focus();
+    lastDialogTrigger = null;
+  }
+
+  function renderSearchResults() {
+    const query = (state.ui.search || '').trim();
+    els.searchResults.innerHTML = '';
+    els.searchResults.classList.toggle('open', Boolean(query));
+    if (!query) return;
+    const { results } = findTreeMatches(state, query);
+    if (!results.length) {
+      els.searchResults.innerHTML = '<div class="search-result-empty">No matching topics, questions, answers, or sources.</div>';
+      return;
+    }
+    results.slice(0, 30).forEach(result => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'search-result-button';
+      button.innerHTML = `
+        <strong>${escapeHtml(result.label)}</strong>
+        <span>${escapeHtml(result.path.join(' › '))}</span>
+      `;
+      button.addEventListener('click', () => {
+        state.ui.search = '';
+        els.searchInput.value = '';
+        els.searchResults.classList.remove('open');
+        setFocusTarget(result.target, { switchView: true });
+      });
+      els.searchResults.appendChild(button);
+    });
+  }
+
+  function setBackgroundInert(value) {
+    els.workspace.inert = value;
+    const topbar = document.querySelector('.topbar');
+    if (topbar) topbar.inert = value;
+  }
+
   // ── View / theme state ────────────────────────────────────────────────────
 
   function setTheme(theme) {
     if (!THEMES.includes(theme)) theme = 'modern';
     state.settings.theme = theme;
-    document.body.className = 'theme-' + theme;
+    applyBodyClasses();
     persist();
   }
 
+  function applyBodyClasses() {
+    document.body.className = `theme-${state.settings.theme || 'modern'}`;
+    document.body.classList.toggle('phone-board-preview', phoneMedia.matches && state.settings.mainView === 'board');
+  }
+
   function setMainView(view) {
-    state.settings.mainView = view === 'outline' ? 'outline' : 'board';
+    state.settings.mainView = view === 'focus' ? 'focus' : 'board';
+    applyBodyClasses();
     renderViewMode();
+    if (state.settings.mainView === 'focus') renderFocus();
+    else renderCanvas();
     persist();
   }
 
   function toggleSidebar(forceValue) {
-    state.settings.sidebarOpen = typeof forceValue === 'boolean' ? forceValue : !state.settings.sidebarOpen;
+    const nextValue = typeof forceValue === 'boolean' ? forceValue : !state.settings.sidebarOpen;
+    if (nextValue && phoneMedia.matches) lastSidebarTrigger = document.activeElement;
+    state.settings.sidebarOpen = nextValue;
     renderSidebarState();
     persist();
+    if (nextValue && phoneMedia.matches) requestAnimationFrame(() => els.collapseSidebarInnerBtn.focus());
+    if (!nextValue && phoneMedia.matches) {
+      const returnTarget = lastSidebarTrigger;
+      lastSidebarTrigger = null;
+      returnTarget?.focus?.();
+    }
   }
 
   function renderSidebarState() {
+    const sidebar = els.workspace.querySelector('.sidebar');
     els.workspace.classList.toggle('sidebar-collapsed', !state.settings.sidebarOpen);
+    els.toggleSidebarBtn.setAttribute('aria-expanded', state.settings.sidebarOpen ? 'true' : 'false');
+    els.sidebarBackdrop.classList.toggle('visible', state.settings.sidebarOpen);
+    sidebar?.setAttribute('aria-hidden', state.settings.sidebarOpen ? 'false' : 'true');
+    if (sidebar) sidebar.inert = !state.settings.sidebarOpen;
   }
 
   function renderViewMode() {
-    const board = state.settings.mainView !== 'outline';
+    const board = state.settings.mainView !== 'focus';
     els.boardView.classList.toggle('hidden', !board);
-    els.outlineView.classList.toggle('hidden', board);
+    els.focusView.classList.toggle('hidden', board);
     els.boardViewBtn.classList.toggle('primary', board);
-    els.outlineViewBtn.classList.toggle('primary', !board);
+    els.focusViewBtn.classList.toggle('primary', !board);
     els.boardViewBtn.classList.toggle('soft', !board);
-    els.outlineViewBtn.classList.toggle('soft', board);
+    els.focusViewBtn.classList.toggle('soft', board);
+    els.boardViewBtn.setAttribute('aria-pressed', board ? 'true' : 'false');
+    els.focusViewBtn.setAttribute('aria-pressed', board ? 'false' : 'true');
   }
 
   // ── Main render ───────────────────────────────────────────────────────────
 
   function render() {
     normalizeState();
-    document.body.className = 'theme-' + (state.settings.theme || 'modern');
+    applyBodyClasses();
     els.searchInput.value = state.ui.search || '';
     renderSidebarState();
     renderViewMode();
     renderCanvas();
+    renderFocus();
     renderOutlineText();
+    renderSearchResults();
     updateButtons();
+    if (els.orderBackdrop.classList.contains('open') && orderSheetParent) renderOrderSheet();
   }
 
   function updateButtons() {
     els.undoBtn.disabled = !state.history.past.length;
     els.redoBtn.disabled = !state.history.future.length;
     els.selectionPill.textContent = getSelectedItem() ? itemLabel(getSelectedItem()) : 'No selection';
+    const showFocusCta = phoneMedia.matches
+      && state.settings.mainView === 'board'
+      && Boolean(state.ui.activeQuestionId || state.ui.selectedItemId);
+    els.openSelectedInFocusBtn.classList.toggle('hidden', !showFocusCta);
   }
 
   // ── Editable helpers ──────────────────────────────────────────────────────
 
   let pushedThisFocus = false;
 
+  function focusWithoutHistory(element, options) {
+    if (!element) return;
+    suppressNextHistoryFocus = true;
+    element.focus(options);
+    queueMicrotask(() => { suppressNextHistoryFocus = false; });
+  }
+
   function pushHistoryOnce() {
+    if (suppressNextHistoryFocus) {
+      suppressNextHistoryFocus = false;
+      return;
+    }
     if (pushedThisFocus) return;
     pushedThisFocus = true;
     pushHistory();
+    updateButtons();
     setTimeout(() => { pushedThisFocus = false; }, 0);
   }
 
@@ -1519,14 +2258,20 @@
     const pill = els.selectionPill;
     const original = pill.textContent;
     pill.textContent = message;
+    els.appToast.textContent = message;
+    els.appToast.classList.add('visible');
     toastTimer = setTimeout(() => {
       pill.textContent = getSelectedItem() ? itemLabel(getSelectedItem()) : original;
+      els.appToast.classList.remove('visible');
     }, 1800);
   }
 
   // ── Modal ─────────────────────────────────────────────────────────────────
 
   function openModal(config) {
+    lastDialogTrigger = els.actionsDropdown.contains(document.activeElement)
+      ? els.actionsBtn
+      : document.activeElement;
     els.modalTitle.textContent = config.title || 'Modal';
     els.modalSubtitle.textContent = config.subtitle || '';
     els.modalTextarea.value = config.initialValue || '';
@@ -1541,6 +2286,8 @@
       els.modalActions.appendChild(btn);
     });
     els.modalBackdrop.classList.add('open');
+    els.modalBackdrop.setAttribute('aria-hidden', 'false');
+    setBackgroundInert(true);
     setTimeout(() => {
       if (!config.hideTextarea) els.modalTextarea.focus();
       else els.modalActions.querySelector('button')?.focus();
@@ -1549,6 +2296,10 @@
 
   function closeModal() {
     els.modalBackdrop.classList.remove('open');
+    els.modalBackdrop.setAttribute('aria-hidden', 'true');
+    setBackgroundInert(false);
+    lastDialogTrigger?.focus?.();
+    lastDialogTrigger = null;
   }
 
   function openConfirm(title, subtitle, onConfirm) {
@@ -1577,6 +2328,19 @@
   function assertTree(candidate) {
     const items = candidate.entities?.items || {};
     const questions = candidate.entities?.questions || {};
+    const safeId = value => typeof value === 'string' && /^[A-Za-z0-9_-]+$/.test(value);
+    Object.entries(items).forEach(([id, item]) => {
+      if (!safeId(id) || item?.id !== id) throw new Error(`Invalid item identifier: ${id}`);
+      (item.sourceList || []).forEach(source => {
+        if (!safeId(source?.id)) throw new Error(`Invalid source identifier on item: ${id}`);
+      });
+    });
+    Object.entries(questions).forEach(([id, question]) => {
+      if (!safeId(id) || question?.id !== id) throw new Error(`Invalid question identifier: ${id}`);
+    });
+    (candidate.roots || []).forEach(id => {
+      if (!safeId(id)) throw new Error(`Invalid root identifier: ${id}`);
+    });
     const seenItems = new Set();
     const seenQuestions = new Set();
     const walkItem = id => {
@@ -1789,12 +2553,14 @@
 
   function closeActionsDropdown() {
     els.actionsDropdown.classList.remove('open');
+    els.actionsBtn.setAttribute('aria-expanded', 'false');
   }
 
   function addActionItem(dropdown, label, onClick, isDanger) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'examples-dropdown-item' + (isDanger ? ' action-danger' : '');
+    btn.setAttribute('role', 'menuitem');
     btn.textContent = label;
     btn.addEventListener('click', () => { closeActionsDropdown(); onClick(); });
     dropdown.appendChild(btn);
@@ -1866,6 +2632,7 @@
       addActionItem(dropdown, (val === current ? '\u2713 ' : '  ') + label, () => setTheme(val));
     });
     dropdown.classList.add('open');
+    els.actionsBtn.setAttribute('aria-expanded', 'true');
   }
 
     async function loadExample(file, name) {
@@ -1895,8 +2662,9 @@
   function setupEvents() {
     els.toggleSidebarBtn.addEventListener('click', () => toggleSidebar());
     els.collapseSidebarInnerBtn.addEventListener('click', () => toggleSidebar(false));
+    els.sidebarBackdrop.addEventListener('click', () => toggleSidebar(false));
     els.boardViewBtn.addEventListener('click', () => setMainView('board'));
-    els.outlineViewBtn.addEventListener('click', () => setMainView('outline'));
+    els.focusViewBtn.addEventListener('click', () => setMainView('focus'));
     els.undoBtn.addEventListener('click', undo);
     els.redoBtn.addEventListener('click', redo);
     els.resetZoomBtn?.addEventListener('click', resetZoom);
@@ -1904,6 +2672,18 @@
     els.zoomOutBtn?.addEventListener('click', () => zoomStep(0.8));
     els.zoomFitBtn?.addEventListener('click', fitView);
     els.actionsBtn.addEventListener('click', e => { e.stopPropagation(); toggleActionsDropdown(); });
+    els.closeOrderSheetBtn.addEventListener('click', closeOrderSheet);
+    els.orderBackdrop.addEventListener('click', e => {
+      if (e.target === els.orderBackdrop) closeOrderSheet();
+    });
+    els.openSelectedInFocusBtn.addEventListener('click', () => {
+      const target = targetExists(state, state.ui.focusTarget)
+        ? state.ui.focusTarget
+        : state.ui.activeQuestionId
+          ? { kind: 'question', id: state.ui.activeQuestionId }
+          : { kind: 'item', id: state.ui.selectedItemId };
+      setFocusTarget(target, { switchView: true });
+    });
     document.addEventListener('click', e => {
       if (!els.actionsDropdown.classList.contains('open')) return;
       if (!els.actionsBtn.contains(e.target) && !els.actionsDropdown.contains(e.target)) {
@@ -1914,6 +2694,8 @@
       state.ui.search = e.target.value;
       schedulePersist();
       renderOutlineText();
+      renderSearchResults();
+      renderCanvas();
     });
     els.copyOutlineBtn.addEventListener('click', () => copyToClipboard(generateOutline(), 'Outline copied.'));
     els.downloadTextBtn.addEventListener('click', () => download('socrates-app-outline.txt', generateOutline()));
@@ -1927,9 +2709,53 @@
     els.modalBackdrop.addEventListener('click', e => {
       if (e.target === els.modalBackdrop) closeModal();
     });
+    const handlePhoneMediaChange = () => {
+      applyBodyClasses();
+      render();
+    };
+    if (phoneMedia.addEventListener) phoneMedia.addEventListener('change', handlePhoneMediaChange);
+    else phoneMedia.addListener?.(handlePhoneMediaChange);
 
     document.addEventListener('keydown', e => {
+      const focusLayer = els.modalBackdrop.classList.contains('open')
+        ? els.modalBackdrop.querySelector('.modal')
+        : els.orderBackdrop.classList.contains('open')
+          ? els.orderSheet
+          : phoneMedia.matches && state.settings.sidebarOpen
+            ? els.workspace.querySelector('.sidebar')
+            : null;
+      if (e.key === 'Tab' && focusLayer && trapFocus(e, focusLayer)) return;
       const isInput = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
+      if (e.key === 'Escape') {
+        if (els.modalBackdrop.classList.contains('open')) { closeModal(); return; }
+        if (els.orderBackdrop.classList.contains('open')) { closeOrderSheet(); return; }
+        if (state.settings.sidebarOpen && phoneMedia.matches) { toggleSidebar(false); return; }
+        if (document.activeElement === els.searchInput && state.ui.search) {
+          state.ui.search = '';
+          els.searchInput.value = '';
+          renderOutlineText();
+          renderSearchResults();
+          renderCanvas();
+          persist();
+          return;
+        }
+        if (isInput) {
+          document.activeElement.blur();
+          return;
+        }
+        if (state.settings.mainView !== 'board') return;
+        const anyExpanded = Object.values(state.entities.items).some(item => item.nodeMode === 'expanded');
+        if (anyExpanded) {
+          pushHistory();
+          Object.values(state.entities.items).forEach(item => { item.nodeMode = 'collapsed'; });
+          persist();
+          renderCanvas();
+        }
+        return;
+      }
+      if (els.modalBackdrop.classList.contains('open')
+        || els.orderBackdrop.classList.contains('open')
+        || els.actionsDropdown.classList.contains('open')) return;
       // Only take over undo/redo when the caret isn't in a text field, so
       // native per-character undo keeps working while editing content.
       if (!isInput) {
@@ -1939,17 +2765,6 @@
         if (((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'z') || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y')) {
           e.preventDefault(); redo(); return;
         }
-      }
-      if (e.key === 'Escape') {
-        if (els.modalBackdrop.classList.contains('open')) { closeModal(); return; }
-        const anyExpanded = Object.values(state.entities.items).some(item => item.nodeMode === 'expanded');
-        if (anyExpanded) {
-          pushHistory();
-          Object.values(state.entities.items).forEach(item => { item.nodeMode = 'collapsed'; });
-          persist();
-          renderCanvas();
-        }
-        return;
       }
       if (isInput) return;
       if (e.key.toLowerCase() === 'q') {
@@ -1962,15 +2777,38 @@
         if (state.ui.activeQuestionId) addAnswerToQuestion(state.ui.activeQuestionId);
       }
       // Zoom hotkeys (plain keys, board-focused; don't fight browser zoom).
-      if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomStep(1.25); }
-      else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoomStep(0.8); }
-      else if (e.key === '0') { e.preventDefault(); resetZoom(); }
-      else if (e.key.toLowerCase() === 'f') { e.preventDefault(); fitView(); }
+      if (state.settings.mainView === 'board') {
+        if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomStep(1.25); }
+        else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoomStep(0.8); }
+        else if (e.key === '0') { e.preventDefault(); resetZoom(); }
+        else if (e.key.toLowerCase() === 'f') { e.preventDefault(); fitView(); }
+      }
     });
 
     initPanEvents();
   }
 
+  function trapFocus(event, container) {
+    const focusable = [...container.querySelectorAll(
+      'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )].filter(element => element.offsetParent !== null);
+    if (!focusable.length) return false;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+      return true;
+    }
+    if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+      return true;
+    }
+    return false;
+  }
+
   render();
   setupEvents();
+  if (loadedFromLegacyStorage) persist();
 })();

@@ -13,38 +13,40 @@
   <header class="topbar" role="banner">
     <div class="brand">
       <img src="icon2.png" class="brand-mark" aria-hidden="true" alt="" />
-      <div>
+      <div class="brand-copy">
         <h1>Socrates App</h1>
         <p>A depth-first tree of questions and answers for strategic thinking.</p>
       </div>
     </div>
 
-    <div class="toolbar-group" role="toolbar" aria-label="Primary actions">
-      <button id="toggleSidebarBtn" class="icon-btn" title="Toggle outline sidebar" aria-label="Toggle outline sidebar">☰</button>
+    <div class="toolbar-group nav-toggle-group" role="toolbar" aria-label="Primary actions">
+      <button id="toggleSidebarBtn" class="icon-btn" title="Toggle outline sidebar" aria-label="Toggle outline sidebar" aria-expanded="false">☰</button>
     </div>
 
-    <div class="toolbar-group" role="toolbar" aria-label="View controls">
-      <button id="boardViewBtn" class="soft">Board</button>
-      <button id="outlineViewBtn" class="soft">Outline</button>
+    <div class="toolbar-group view-switcher" role="toolbar" aria-label="Workspace">
+      <button id="boardViewBtn" class="soft" aria-pressed="true">Board</button>
+      <button id="focusViewBtn" class="soft" aria-pressed="false">Focus</button>
     </div>
 
-    <div class="toolbar-group" role="toolbar" aria-label="History">
-      <button id="undoBtn" class="soft" title="Undo (Ctrl/Cmd+Z)" style="font-size:1.1rem;">↶</button>
-      <button id="redoBtn" class="soft" title="Redo (Ctrl/Cmd+Shift+Z)" style="font-size:1.1rem;">↷</button>
+    <div class="toolbar-group history-group" role="toolbar" aria-label="History">
+      <button id="undoBtn" class="soft icon-action" title="Undo (Ctrl/Cmd+Z)" aria-label="Undo">↶</button>
+      <button id="redoBtn" class="soft icon-action" title="Redo (Ctrl/Cmd+Shift+Z)" aria-label="Redo">↷</button>
     </div>
 
     <div class="toolbar-group actions-wrap" role="toolbar" aria-label="Actions">
-      <button id="actionsBtn" class="soft" aria-haspopup="true">Actions ▾</button>
+      <button id="actionsBtn" class="soft" aria-haspopup="true" aria-expanded="false">Actions ▾</button>
       <div id="actionsDropdown" class="examples-dropdown" role="menu"></div>
     </div>
 
     <div class="search-box" role="search" title="Search items, questions, and sources">
       <span aria-hidden="true">🔎</span>
       <input id="searchInput" type="search" placeholder="Search…" aria-label="Search topics, questions, and sources" autocomplete="off" />
+      <div id="searchResults" class="search-results" aria-label="Search results"></div>
     </div>
   </header>
 
   <div id="workspace" class="workspace">
+    <button id="sidebarBackdrop" class="sidebar-backdrop" type="button" aria-label="Close outline sidebar"></button>
 
     <aside class="sidebar" role="complementary" aria-label="Outline navigator">
       <div class="sidebar-header">
@@ -67,7 +69,7 @@
             </div>
           </div>
           <div class="panel-body">
-            <pre id="outlineText" class="export-text" aria-live="polite" tabindex="0" title="Paste outline text here (⌘/Ctrl+V) to rebuild the tree"></pre>
+            <pre id="outlineText" class="export-text" tabindex="0" title="Paste outline text here (⌘/Ctrl+V) to rebuild the tree"></pre>
           </div>
         </section>
       </div>
@@ -80,10 +82,10 @@
 
         <!-- Zoom controls -->
         <div id="zoomBar" class="zoom-bar" aria-label="Zoom controls">
-          <button id="zoomInBtn"  class="zoom-btn" title="Zoom in (+)">＋</button>
-          <button id="zoomOutBtn" class="zoom-btn" title="Zoom out (−)">－</button>
-          <button id="zoomFitBtn" class="zoom-btn" title="Fit all nodes in view (F)">⊡</button>
-          <button id="resetZoomBtn" class="zoom-btn zoom-readout" title="Current zoom — click to reset to 100% (0)">100%</button>
+          <button id="zoomInBtn"  class="zoom-btn" title="Zoom in (+)" aria-label="Zoom in">＋</button>
+          <button id="zoomOutBtn" class="zoom-btn" title="Zoom out (−)" aria-label="Zoom out">－</button>
+          <button id="zoomFitBtn" class="zoom-btn" title="Fit all nodes in view (F)" aria-label="Fit all nodes in view">⊡</button>
+          <button id="resetZoomBtn" class="zoom-btn zoom-readout" title="Current zoom — click to reset to 100% (0)" aria-label="Reset zoom to 100 percent">100%</button>
         </div>
 
         <!-- Canvas legend -->
@@ -92,26 +94,34 @@
           <span class="legend-item legend-question">Question</span>
           <span class="legend-item legend-answer">Answer</span>
         </div>
+
+        <button id="openSelectedInFocusBtn" class="mobile-focus-cta primary hidden" type="button">Open in Focus</button>
       </div>
 
-      <section id="outlineView" class="panel hidden" aria-label="Outline workspace">
-        <div class="panel-header">
-          <div>
-            <div class="panel-title">Outline Workspace</div>
-            <div class="panel-subtitle">This mirrors the export: breadth-first overview first, then drill-down into each populated branch.</div>
-          </div>
-          <div class="status">
-            <span class="pill">Only meaningful branches render</span>
-            <span class="pill">Use JSON export to resume sessions</span>
-          </div>
-        </div>
-        <div class="panel-body">
-          <pre id="outlineViewText" class="export-text"></pre>
+      <section id="focusView" class="focus-workspace hidden" aria-label="Focus workspace">
+        <div class="focus-scroll">
+          <nav id="focusBreadcrumbs" class="focus-breadcrumbs" aria-label="Current branch"></nav>
+          <section id="focusContext" class="focus-context" aria-label="Parent and sibling context"></section>
+          <section id="focusCurrent" class="focus-current" aria-label="Current item"></section>
+          <section id="focusChildren" class="focus-children" aria-label="Immediate children"></section>
         </div>
       </section>
     </main>
 
   </div><!-- /workspace -->
+
+  <div id="orderBackdrop" class="sheet-backdrop" aria-hidden="true">
+    <aside id="orderSheet" class="order-sheet" role="dialog" aria-modal="true" aria-labelledby="orderSheetTitle">
+      <div class="sheet-header">
+        <div>
+          <div id="orderSheetTitle" class="panel-title">Order children</div>
+          <div id="orderSheetSubtitle" class="panel-subtitle"></div>
+        </div>
+        <button id="closeOrderSheetBtn" class="icon-btn" type="button" aria-label="Close ordering panel">×</button>
+      </div>
+      <div id="orderList" class="order-list"></div>
+    </aside>
+  </div>
 
   <div id="modalBackdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-hidden="true">
     <div class="modal panel">
@@ -129,7 +139,10 @@
     </div>
   </div>
 
+  <div id="saveIndicator" class="save-indicator" aria-live="polite">Saved locally</div>
+  <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
+
 </div><!-- /app-shell -->
-<script src="app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>

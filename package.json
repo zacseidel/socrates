@@ -1,0 +1,9 @@
+{
+  "name": "socrates-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check app.js && node --check tree-model.js"
+  }
+}
